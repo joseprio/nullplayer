@@ -12,6 +12,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
@@ -128,6 +129,7 @@ fun PlayerScreen(
     onPrevious: () -> Unit,
     onScrub: (Long) -> Unit,
     onSeek: (Float) -> Unit,
+    onToggleTimeMode: () -> Unit,
     onVoiceOver: () -> Unit,
     onVoiceOverLong: () -> Unit,
     onToggleShuffle: () -> Unit,
@@ -195,6 +197,7 @@ fun PlayerScreen(
                             onPrevious = onPrevious,
                             onScrub = onScrub,
                             onSeek = onSeek,
+                            onToggleTimeMode = onToggleTimeMode,
                         )
                     }
                 }
@@ -211,6 +214,7 @@ fun PlayerScreen(
                     onPrevious = onPrevious,
                     onScrub = onScrub,
                     onSeek = onSeek,
+                    onToggleTimeMode = onToggleTimeMode,
                 )
                 Spacer(Modifier.weight(1f))
             }
@@ -421,6 +425,7 @@ private fun Controls(
     onPrevious: () -> Unit,
     onScrub: (Long) -> Unit,
     onSeek: (Float) -> Unit,
+    onToggleTimeMode: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth()) {
         Transport(
@@ -432,7 +437,7 @@ private fun Controls(
         )
         if (state.settings.showSeeker) {
             Spacer(Modifier.height(18.dp))
-            Progress(state = state, onSeek = onSeek)
+            Progress(state = state, onSeek = onSeek, onToggleTimeMode = onToggleTimeMode)
         }
     }
 }
@@ -619,7 +624,11 @@ private fun itemCountLabel(count: Int): String = if (count == 1) "1 item" else "
 
 /** The progress bar. Draggable, and wide enough to be worth dragging. */
 @Composable
-private fun Progress(state: PlayerUiState, onSeek: (Float) -> Unit) {
+private fun Progress(
+    state: PlayerUiState,
+    onSeek: (Float) -> Unit,
+    onToggleTimeMode: () -> Unit,
+) {
     var dragFraction by remember { mutableFloatStateOf(-1f) }
     val seekable = state.durationMs > 0
     val shown = if (dragFraction >= 0f) dragFraction else state.progress
@@ -681,7 +690,7 @@ private fun Progress(state: PlayerUiState, onSeek: (Float) -> Unit) {
             }
         }
 
-        Row(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = clock((shown * state.durationMs).toLong()),
                 color = MUTED,
@@ -690,17 +699,39 @@ private fun Progress(state: PlayerUiState, onSeek: (Float) -> Unit) {
             )
             Spacer(Modifier.weight(1f))
             Text(
-                text = if (state.durationMs > 0) {
-                    "-" + clock(state.durationMs - (shown * state.durationMs).toLong())
-                } else {
-                    "--:--"
-                },
+                text = remainder(state, shown),
                 color = MUTED,
                 fontSize = 12.sp,
                 fontFamily = FontFamily.Monospace,
+                modifier = Modifier
+                    .clickable(
+                        // No ripple and no shape: this is a line of text that answers a second
+                        // question when asked, not a button pretending to be one.
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onToggleTimeMode,
+                    )
+                    // The target grows inward and downward, away from the two edges the label is
+                    // pinned to, so it becomes worth hitting without the digits moving at all.
+                    .padding(start = 24.dp, top = 6.dp, bottom = 6.dp),
             )
         }
     }
+}
+
+/**
+ * The right-hand label: how much of the track is left, or how long the whole thing is.
+ *
+ * Both are the same number seen from opposite ends, and which one is wanted depends entirely on
+ * the moment — so it is a tap rather than a setting buried in a screen nobody would think to
+ * open for it. The choice is remembered, because a preference expressed by tapping is still a
+ * preference.
+ */
+private fun remainder(state: PlayerUiState, shown: Float): String = when {
+    state.durationMs <= 0L -> "--:--"
+    state.settings.showRemainingTime ->
+        "-" + clock(state.durationMs - (shown * state.durationMs).toLong())
+    else -> clock(state.durationMs)
 }
 
 @Composable

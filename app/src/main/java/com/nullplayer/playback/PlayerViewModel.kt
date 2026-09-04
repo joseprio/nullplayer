@@ -190,14 +190,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private val playerListener = object : Player.Listener {
-        override fun onIsPlayingChanged(isPlaying: Boolean) {
-            _state.update { it.copy(isPlaying = isPlaying) }
-            if (isPlaying) startTicking()
-        }
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = readPlayback()
 
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) = readPosition()
 
-        override fun onPlaybackStateChanged(playbackState: Int) = readPosition()
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            readPlayback()
+            readPosition()
+        }
 
         override fun onPositionDiscontinuity(
             oldPosition: Player.PositionInfo,
@@ -327,10 +327,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 shuffleModeEnabled = _state.value.settings.shuffle
                 repeatMode = _state.value.repeat.playerValue
             }
-            _state.update { it.copy(isPlaying = controller?.isPlaying == true) }
+            readPlayback()
             syncQueue(_state.value.tracks, switched = false)
             readPosition()
-            if (_state.value.isPlaying) startTicking()
         }, ContextCompat.getMainExecutor(context))
     }
 
@@ -389,7 +388,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun togglePlay() {
         val player = controller ?: return
-        if (player.isPlaying) {
+        // The state's own answer rather than the player's, so a press during a track change does
+        // what the pause icon under the finger promises.
+        if (_state.value.isPlaying) {
             player.pause()
             return
         }
@@ -525,6 +526,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val next = !_state.value.settings.shuffle
         controller?.shuffleModeEnabled = next
         viewModelScope.launch { settings.setShuffle(next) }
+    }
+
+    /** Swaps the seeker's right-hand label between time left and track length. */
+    fun toggleTimeMode() {
+        val next = !_state.value.settings.showRemainingTime
+        viewModelScope.launch { settings.setShowRemainingTime(next) }
     }
 
     fun cycleRepeat() {
@@ -688,6 +695,28 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 delay(TICK_MS)
             }
         }
+    }
+
+    /**
+     * Whether the player is *meant* to be playing, which is what the button reports.
+     *
+     * `Player.isPlaying` is false for as long as a track change spends buffering, so a button
+     * driven off it flashed the play triangle on every skip before settling back on pause. What
+     * the user asked for does not blink: `playWhenReady` stays true across the gap. The two
+     * answers only genuinely part company at the end of the queue, where nothing is going to
+     * start however willing the player is, so a finished queue counts as stopped.
+     *
+     * Audio focus lost to a call or a notification is deliberately not counted either. Playback
+     * is suppressed rather than stopped, it resumes by itself, and a button that flipped to play
+     * and back for a ducked notification would be the same flicker in a different costume.
+     */
+    private fun readPlayback() {
+        val player = controller
+        val intending = player != null &&
+            player.playWhenReady &&
+            player.playbackState != Player.STATE_ENDED
+        _state.update { if (it.isPlaying == intending) it else it.copy(isPlaying = intending) }
+        if (intending) startTicking()
     }
 
     private fun readPosition() {

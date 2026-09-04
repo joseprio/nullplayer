@@ -50,6 +50,11 @@ data class AppSettings(
     /** Which tile the ribbon has selected. Blank is the whole vault. */
     val activeGroupId: String = "",
     val showSeeker: Boolean = true,
+    /**
+     * Which way the label on the right of the seeker reads: counting down to the end of the
+     * track, or simply stating how long it is. Tapping it swaps the two.
+     */
+    val showRemainingTime: Boolean = true,
     /** The "12 items" line on each ribbon tile. */
     val showVaultCounts: Boolean = true,
     /** The text-to-speech voice VoiceOver uses. Blank means whatever the engine picks. */
@@ -79,6 +84,7 @@ class Settings(private val context: Context) {
             equalizerAutoEq = prefs[EQ_AUTOEQ].orEmpty(),
             activeGroupId = prefs[ACTIVE_GROUP].orEmpty(),
             showSeeker = prefs[SHOW_SEEKER] ?: true,
+            showRemainingTime = prefs[SHOW_REMAINING_TIME] ?: true,
             showVaultCounts = prefs[SHOW_VAULT_COUNTS] ?: true,
             voiceName = prefs[VOICE_NAME].orEmpty(),
             askedForNotifications = prefs[ASKED_FOR_NOTIFICATIONS] ?: false,
@@ -121,6 +127,8 @@ class Settings(private val context: Context) {
 
     suspend fun setShowSeeker(show: Boolean) = put(SHOW_SEEKER, show)
 
+    suspend fun setShowRemainingTime(show: Boolean) = put(SHOW_REMAINING_TIME, show)
+
     suspend fun setShowVaultCounts(show: Boolean) = put(SHOW_VAULT_COUNTS, show)
 
     suspend fun setVoiceName(name: String) = put(VOICE_NAME, name)
@@ -148,6 +156,7 @@ class Settings(private val context: Context) {
         val EQ_AUTOEQ = stringPreferencesKey("equalizer_autoeq")
         val ACTIVE_GROUP = stringPreferencesKey("active_group")
         val SHOW_SEEKER = booleanPreferencesKey("show_seeker")
+        val SHOW_REMAINING_TIME = booleanPreferencesKey("show_remaining_time")
         val SHOW_VAULT_COUNTS = booleanPreferencesKey("show_vault_counts")
         val VOICE_NAME = stringPreferencesKey("voice_name")
         val ASKED_FOR_NOTIFICATIONS = booleanPreferencesKey("asked_for_notifications")
