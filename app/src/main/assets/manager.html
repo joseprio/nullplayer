@@ -30,28 +30,44 @@
   .logout { margin-left: auto; color: var(--muted); font-size: 13px; text-decoration: none; }
   .logout:hover { color: var(--text); }
 
+  /* 2px, and lighter than --line: at 1px in the line colour the dashes are too small and
+     too dim to read as dashes at all, and the zone looks like a plain panel. */
   #drop {
-    border: 1px dashed var(--line); border-radius: 14px; background: var(--panel);
+    border: 2px dashed #45474f; border-radius: 14px; background: var(--panel);
     padding: 44px 20px; text-align: center; cursor: pointer;
     transition: border-color .15s, background .15s;
   }
-  #drop:hover { border-color: #3a3b42; }
+  #drop:hover { border-color: #5c5f69; }
   #drop.over { border-color: var(--accent); background: #14211a; }
   #drop h2 { font-size: 16px; font-weight: 500; margin: 0 0 6px; }
   #drop p { color: var(--muted); font-size: 13px; margin: 0; }
   #picker { display: none; }
 
   #queue { margin-top: 18px; display: grid; gap: 8px; }
+  #summary { color: var(--muted); font-size: 13px; }
   .job {
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
     padding: 11px 14px; font-size: 13px;
   }
-  .job .row { display: flex; gap: 12px; align-items: center; }
+  .job .row { display: flex; gap: 12px; align-items: baseline; }
   .job .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .job .pct { color: var(--muted); font-variant-numeric: tabular-nums; }
-  .job.failed .pct { color: var(--danger); }
+  .job .state { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* Each state gets its own colour, and the two that have finished get an edge as well, so a
+     glance down the queue separates what is still working from what is done or stuck. */
+  .job.waiting { opacity: .6; }
+  .job.working .state { color: var(--text); }
+  .job.done { border-color: #2b4633; }
+  .job.done .state { color: var(--accent); }
+  .job.failed { border-color: #4a2620; }
+  .job.failed .state { color: var(--danger); }
+
   .bar { height: 3px; border-radius: 2px; background: var(--line); margin-top: 9px; overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .12s; }
+  /* The bytes are all sent but the phone is still decrypting and filing: the bar is full and
+     nothing else would move, which reads as stuck unless it is visibly still alive. */
+  .job.importing .bar i { animation: working 1s ease-in-out infinite; }
+  @keyframes working { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
 
   h3 { font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
        color: var(--muted); margin: 38px 0 12px; font-weight: 600; }
@@ -104,6 +120,7 @@
   </div>
   <input type="file" id="picker" multiple accept="audio/*">
 
+  <p id="summary" hidden></p>
   <div id="queue"></div>
 
   <h3>In the vault</h3>
@@ -128,6 +145,7 @@
   var drop = document.getElementById('drop');
   var picker = document.getElementById('picker');
   var queue = document.getElementById('queue');
+  var summary = document.getElementById('summary');
   var list = document.getElementById('list');
   var count = document.getElementById('count');
 
@@ -264,29 +282,53 @@
 
   // -- Uploading ----------------------------------------------------------------
 
-  // One request per file: the phone gets a steady stream of small writes instead of
-  // one enormous body, and each row can show its own progress.
-  function upload(file) {
-    var job = document.createElement('div');
-    job.className = 'job';
+  var AUDIO_NAME = /\.(mp3|m4a|aac|flac|ogg|opus|wav|mp4)$/i;
+
+  /**
+   * One row, which owns its own state from queued to finished.
+   *
+   * Every row is built when the batch is accepted rather than when its turn comes, because
+   * uploads run one at a time: creating them lazily meant dropping ten files showed one row and
+   * left the other nine invisible, with nothing to say they were coming.
+   */
+  function makeJob(file) {
+    var node = document.createElement('div');
+    node.className = 'job waiting';
 
     var row = document.createElement('div');
     row.className = 'row';
     var name = text(file.name);
     name.className = 'name';
-    var pct = text('0%');
-    pct.className = 'pct';
+    var state = text('waiting');
+    state.className = 'state';
     row.appendChild(name);
-    row.appendChild(pct);
-    job.appendChild(row);
+    row.appendChild(state);
+    node.appendChild(row);
 
     var bar = document.createElement('div');
     bar.className = 'bar';
     var fill = document.createElement('i');
     bar.appendChild(fill);
-    job.appendChild(bar);
-    queue.appendChild(job);
+    node.appendChild(bar);
+    queue.appendChild(node);
 
+    return {
+      say: function (className, label) {
+        node.className = 'job ' + className;
+        state.textContent = label;
+      },
+      progress: function (percent) {
+        fill.style.width = percent + '%';
+      },
+      remove: function () {
+        node.remove();
+      }
+    };
+  }
+
+  // One request per file: the phone gets a steady stream of small writes instead of one enormous
+  // body, and each row can show its own progress.
+  function upload(file, job) {
     return new Promise(function (resolve) {
       var form = new FormData();
       form.append('file', file, file.name);
@@ -298,49 +340,95 @@
       request.open('POST', '/api/upload?name=' + encodeURIComponent(file.name));
       request.withCredentials = true;
 
+      job.say('working uploading', 'uploading 0%');
+
       request.upload.addEventListener('progress', function (event) {
         if (!event.lengthComputable) return;
         var percent = Math.round((event.loaded / event.total) * 100);
-        fill.style.width = percent + '%';
-        pct.textContent = percent + '%';
+        job.progress(percent);
+        // The last byte sent is not the end of the job — the phone still has to read the tags,
+        // encrypt it and file it, and that is the stretch this used to spend showing "100%".
+        job.say(
+          percent < 100 ? 'working uploading' : 'working importing',
+          percent < 100 ? 'uploading ' + percent + '%' : 'importing'
+        );
       });
 
       request.addEventListener('load', function () {
-        var ok = false;
-        try {
-          ok = request.status === 200 && JSON.parse(request.responseText).imported > 0;
-        } catch (e) { ok = false; }
+        job.progress(100);
+        var body = null;
+        try { body = JSON.parse(request.responseText); } catch (e) { body = null; }
 
-        if (ok) {
-          pct.textContent = 'done';
-          fill.style.width = '100%';
-          setTimeout(function () { job.remove(); }, 1400);
+        if (request.status === 401) {
+          job.say('failed', 'locked out');
+          resolve(false);
+        } else if (request.status !== 200 || !body) {
+          job.say('failed', 'refused');
+          resolve(false);
+        } else if (body.imported > 0) {
+          job.say('done', 'added');
+          setTimeout(job.remove, 1400);
+          resolve(true);
         } else {
-          job.className = 'job failed';
-          pct.textContent = request.status === 401 ? 'locked' : 'failed';
+          // The server read it and could make nothing of it, which is the one failure worth
+          // naming: the file is not audio it can decode.
+          job.say('failed', 'not readable audio');
+          resolve(false);
         }
-        resolve();
       });
 
       request.addEventListener('error', function () {
-        job.className = 'job failed';
-        pct.textContent = 'failed';
-        resolve();
+        job.say('failed', 'no connection');
+        resolve(false);
       });
 
       request.send(form);
     });
   }
 
+  /** The batch as a whole, so the queue answers "how far along is this?" without being counted. */
+  function report(done, failed, total, skipped) {
+    var parts = [];
+    if (done + failed < total) {
+      parts.push('uploading ' + (done + failed + 1) + ' of ' + total);
+    } else {
+      if (done) parts.push(done + (done === 1 ? ' track added' : ' tracks added'));
+      if (failed) parts.push(failed + ' failed');
+      if (!done && !failed) parts.push('nothing to upload');
+    }
+    if (skipped) parts.push(skipped + (skipped === 1 ? ' file skipped' : ' files skipped'));
+    summary.textContent = parts.join(' · ');
+    summary.hidden = false;
+  }
+
   function uploadAll(files) {
-    var audio = Array.prototype.filter.call(files, function (file) {
-      return file.type.indexOf('audio') === 0 || /\.(mp3|m4a|aac|flac|ogg|opus|wav|mp4)$/i.test(file.name);
+    var all = Array.prototype.slice.call(files);
+    var audio = all.filter(function (file) {
+      return file.type.indexOf('audio') === 0 || AUDIO_NAME.test(file.name);
     });
-    if (!audio.length) return;
+    // Anything that was not audio used to disappear without a word, which looked like a bug when
+    // half a dropped folder arrived.
+    var skipped = all.length - audio.length;
+
+    if (!audio.length) {
+      report(0, 0, 0, skipped);
+      return;
+    }
+
+    var jobs = audio.map(makeJob);
+    var done = 0;
+    var failed = 0;
+    report(0, 0, audio.length, skipped);
 
     // Sequential, so a dropped album does not open twenty sockets at once.
-    audio.reduce(function (chain, file) {
-      return chain.then(function () { return upload(file); }).then(refresh);
+    audio.reduce(function (chain, file, index) {
+      return chain
+        .then(function () { return upload(file, jobs[index]); })
+        .then(function (ok) {
+          if (ok) done++; else failed++;
+          report(done, failed, audio.length, skipped);
+          return refresh();
+        });
     }, Promise.resolve());
   }
 

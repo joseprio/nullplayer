@@ -341,11 +341,13 @@ private fun TopBar(
         }
         // Only once there is an address worth reading.
         if (state.web.enabled && state.web.url != null) {
+            // Plain white rather than accented: the globe beside it is already green to say the
+            // server is running, and two green marks made this look like a second toggle rather
+            // than a way to read the address.
             GlyphButton(
                 glyph = InfoGlyph,
                 contentDescription = "Show the upload address",
                 onClick = onShowAddress,
-                active = true,
                 glyphFraction = 0.34f,
             )
         }
