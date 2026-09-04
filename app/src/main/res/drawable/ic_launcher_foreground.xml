@@ -3,12 +3,27 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Outer ring: the click wheel. -->
+    <!--
+        The empty set, ∅, for the name.
+
+        Sized to reach about 27 from the centre of the 108 canvas. That is well inside the central
+        66 every launcher is guaranteed to show, and it leaves a ring of black around the mark
+        rather than crowding whatever mask the launcher happens to apply.
+
+        The ring is two half arcs rather than one nearly-closed arc, so the stroke has no seam
+        where its ends meet.
+    -->
     <path
-        android:fillColor="#E9E9EC"
-        android:pathData="M54,26a28,28 0 1,0 0.001,0zM54,34a20,20 0 1,1 -0.001,0z" />
-    <!-- Centre button. -->
+        android:pathData="M35.5,54 A18.5,18.5 0 1,1 72.5,54 A18.5,18.5 0 1,1 35.5,54"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7" />
+    <!--
+        The slash runs past the ring at both ends, the way the symbol is written. Flat ends, not
+        round: a round cap on a stroke this thick reads as a knob stuck to the outside of the ring
+        rather than as a line passing through it.
+    -->
     <path
-        android:fillColor="#E9E9EC"
-        android:pathData="M54,44a10,10 0 1,0 0.001,0z" />
+        android:pathData="M35,73 L73,35"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7" />
 </vector>
