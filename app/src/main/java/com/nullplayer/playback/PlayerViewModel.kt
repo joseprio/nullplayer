@@ -64,6 +64,8 @@ data class PlayerUiState(
     val trackIndex: Int = -1,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
+    /** The player is waiting on the file rather than playing it. */
+    val isBuffering: Boolean = false,
     val volume: Int = 0,
     val maxVolume: Int = 1,
     /** Milliseconds until the sleep timer fires, or null when it is disarmed. */
@@ -715,7 +717,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         val intending = player != null &&
             player.playWhenReady &&
             player.playbackState != Player.STATE_ENDED
-        _state.update { if (it.isPlaying == intending) it else it.copy(isPlaying = intending) }
+        val buffering = player != null && player.playbackState == Player.STATE_BUFFERING
+        _state.update {
+            if (it.isPlaying == intending && it.isBuffering == buffering) it
+            else it.copy(isPlaying = intending, isBuffering = buffering)
+        }
         if (intending) startTicking()
     }
 

@@ -3,6 +3,7 @@ package com.nullplayer.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -79,6 +80,7 @@ import com.nullplayer.data.GroupSummary
 import com.nullplayer.playback.PlayerUiState
 import com.nullplayer.playback.RepeatMode as PlayerRepeatMode
 import com.nullplayer.playback.SleepTimer
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -633,6 +635,37 @@ private fun Progress(
     val seekable = state.durationMs > 0
     val shown = if (dragFraction >= 0f) dragFraction else state.progress
 
+    // A track whose length is still unknown is one the player has not finished opening: there is
+    // no position to draw and no duration to draw it against, which is the "--:--" the user sees.
+    val waiting = state.isBuffering && !seekable
+
+    /**
+     * Held back a moment before it appears.
+     *
+     * Every track change passes through buffering for a few dozen milliseconds. Reacting to that
+     * instantly would put a flash of animation between every song — the same blink the play button
+     * used to have — so the bar only admits to waiting once the wait is long enough to be worth
+     * mentioning. Going back to normal is immediate: an answer that has arrived should not be held.
+     */
+    var busy by remember { mutableStateOf(false) }
+    LaunchedEffect(waiting) {
+        if (!waiting) {
+            busy = false
+        } else {
+            delay(BUSY_AFTER_MS)
+            busy = true
+        }
+    }
+
+    val sweep by rememberInfiniteTransition(label = "loading").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1100, easing = FastOutSlowInEasing),
+        ),
+        label = "sweep",
+    )
+
     Column(Modifier.fillMaxWidth()) {
         Box(
             modifier = Modifier
@@ -671,21 +704,39 @@ private fun Progress(
                     strokeWidth = trackHeight,
                     cap = StrokeCap.Round,
                 )
-                if (shown > 0f) {
-                    drawLine(
-                        color = ACCENT,
-                        start = Offset(0f, y),
-                        end = Offset(size.width * shown, y),
-                        strokeWidth = trackHeight,
-                        cap = StrokeCap.Round,
-                    )
-                }
-                if (seekable) {
-                    drawCircle(
-                        color = ACCENT,
-                        radius = if (dragFraction >= 0f) 9.dp.toPx() else 6.dp.toPx(),
-                        center = Offset(size.width * shown, y),
-                    )
+                if (busy) {
+                    // A short piece of the bar crossing it and leaving, over and over. It says the
+                    // same thing a filled bar says — something is happening — without claiming to
+                    // know how far along it is, which is the one thing nobody knows yet.
+                    val head = sweep * (1f + BUSY_SPAN)
+                    val from = ((head - BUSY_SPAN) * size.width).coerceIn(0f, size.width)
+                    val to = (head * size.width).coerceIn(0f, size.width)
+                    if (to > from) {
+                        drawLine(
+                            color = ACCENT,
+                            start = Offset(from, y),
+                            end = Offset(to, y),
+                            strokeWidth = trackHeight,
+                            cap = StrokeCap.Round,
+                        )
+                    }
+                } else {
+                    if (shown > 0f) {
+                        drawLine(
+                            color = ACCENT,
+                            start = Offset(0f, y),
+                            end = Offset(size.width * shown, y),
+                            strokeWidth = trackHeight,
+                            cap = StrokeCap.Round,
+                        )
+                    }
+                    if (seekable) {
+                        drawCircle(
+                            color = ACCENT,
+                            radius = if (dragFraction >= 0f) 9.dp.toPx() else 6.dp.toPx(),
+                            center = Offset(size.width * shown, y),
+                        )
+                    }
                 }
             }
         }
@@ -718,6 +769,12 @@ private fun Progress(
         }
     }
 }
+
+/** How long a wait has to last before the bar starts saying so. */
+private const val BUSY_AFTER_MS = 350L
+
+/** The share of the bar the travelling segment covers. */
+private const val BUSY_SPAN = 0.3f
 
 /**
  * The right-hand label: how much of the track is left, or how long the whole thing is.
