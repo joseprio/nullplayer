@@ -132,7 +132,15 @@ class WebServerController(
     }
 
     private companion object {
-        const val SOCKET_TIMEOUT_MS = 10_000
+        /**
+         * Per-read, not per-request, so it is not a cap on how long an upload may take — it is how
+         * long a stalled one is given to recover. Ten seconds was not enough: a phone whose screen
+         * has gone off can lose that much to Wi-Fi power-save alone, and the upload dies mid-file
+         * for no reason the user can see. A minute rides that out. The cost is an idle kept-alive
+         * connection holding its thread for a minute instead of ten seconds, which for a handful of
+         * browsers on a home network is nothing.
+         */
+        const val SOCKET_TIMEOUT_MS = 60_000
 
         /** Three ticks inside the server's activity window, so the count falls promptly. */
         const val POLL_MS = 5_000L

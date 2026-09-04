@@ -1,7 +1,6 @@
 package com.nullplayer.web
 
 import android.content.Context
-import android.net.Uri
 import android.util.Log
 import com.nullplayer.data.Track
 import com.nullplayer.data.VaultCrypto
@@ -109,6 +108,8 @@ class VaultWebServer(
     private val sessions = ConcurrentHashMap<String, Long>()
     private val random = SecureRandom()
 
+    private val wake = UploadWakeLock(context)
+
     private val failedAttempts = AtomicInteger(0)
 
     /** Set the moment the limit is reached, so requests already in flight are refused too. */
@@ -116,9 +117,17 @@ class VaultWebServer(
 
     init {
         // Android's java.io.tmpdir is not writable, so NanoHTTPD's default temp handling fails on
-        // any upload. Point it at our own cache directory instead.
+        // any body it decides to spool — which is any body over a kilobyte that something calls
+        // `parseBody` on. Point it at our own cache directory instead. Uploads do not come through
+        // here at all any more; see [upload].
         val scratch = File(context.cacheDir, "upload").apply { mkdirs() }
         setTempFileManagerFactory { ScratchTempFileManager(scratch) }
+    }
+
+    /** The locks are held per upload, but a server going down must not leave one behind. */
+    override fun stop() {
+        super.stop()
+        wake.release()
     }
 
     override fun serve(session: IHTTPSession): Response {
@@ -249,39 +258,44 @@ class VaultWebServer(
             .put("bytes", runBlocking { repository.vaultBytes(vaultId) })
     }
 
+    /**
+     * Takes one file, encrypting it into the vault as it arrives.
+     *
+     * The body is the file itself, not a multipart form. NanoHTTPD's own body parsing spools the
+     * whole upload to a temp file before handing over a path, which means nothing overlaps — the
+     * transfer finishes, and only then does encryption start — and every byte is written to
+     * storage twice, once of them in the clear. Reading the raw body straight off the socket
+     * instead makes receiving, encrypting and filing a single pass, and the plaintext never lands
+     * anywhere at all.
+     *
+     * The length is required rather than assumed: it is what tells [VaultRepository.importStream]
+     * where this request's body stops and the next request begins on a kept-alive connection.
+     */
     private fun upload(session: IHTTPSession): Response {
-        // NanoHTTPD spools each part to a temp file and hands back its path.
-        val parts = HashMap<String, String>()
-        session.parseBody(parts)
+        // Preferred over a multipart part's filename because it is percent-encoded UTF-8; see
+        // [readableName].
+        val name = readableName(session.parameters["name"]?.firstOrNull())
+        val length = session.headers["content-length"]?.toLongOrNull()
+            ?: return json(
+                Response.Status.LENGTH_REQUIRED,
+                JSONObject().put("error", "Send the file length"),
+            )
 
-        var imported = 0
-        val failed = JSONArray()
-
-        // Preferred over the multipart filename because it is percent-encoded UTF-8; see
-        // [readableName]. Absent for a client that posts the form directly rather than through
-        // the page.
-        val declaredName = readableName(session.parameters["name"]?.firstOrNull())
-
-        for ((field, temporaryPath) in parts) {
-            if (!field.startsWith("file")) continue
-            val temporary = File(temporaryPath)
-            val originalName = declaredName
-                ?: readableName(session.parameters[field]?.firstOrNull())
-
-            val result = runBlocking {
-                repository.import(
-                    source = Uri.fromFile(temporary),
+        val result = wake.heldFor {
+            runBlocking {
+                repository.importStream(
+                    source = session.inputStream,
+                    bytes = length,
                     groupIds = listOfNotNull(activeVaultId().takeIf { it.isNotEmpty() }),
-                    fallbackName = originalName,
+                    fallbackName = name,
                 )
             }
-            if (result.isSuccess) imported++ else failed.put(originalName ?: field)
-            temporary.delete()
         }
 
+        val failed = JSONArray().apply { if (result.isFailure) put(name ?: "file") }
         return json(
             Response.Status.OK,
-            JSONObject().put("imported", imported).put("failed", failed)
+            JSONObject().put("imported", if (result.isSuccess) 1 else 0).put("failed", failed)
         )
     }
 

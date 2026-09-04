@@ -8,7 +8,10 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.security.SecureRandom
 import java.util.UUID
 import javax.crypto.CipherOutputStream
@@ -141,6 +144,62 @@ class VaultRepository(private val context: Context) {
             }
         }
 
+    /**
+     * Pulls one file in from a live stream, encrypting it as the bytes arrive.
+     *
+     * [import] can read a file's tags before it copies a single byte, because it is handed
+     * something seekable. A socket is not: the tags cannot be read until the whole file is
+     * somewhere, and the only place it is allowed to be is the vault. So the order is inverted —
+     * the stream is encrypted straight into its final home, and the tags are read back out of it
+     * afterwards through [VaultMediaSource]. Receiving, encrypting and writing all happen at once,
+     * nothing is written to storage twice, and no plaintext copy of the file exists at any point.
+     *
+     * A stream that turns out not to be audio has already been written by the time that is known,
+     * so it is deleted again on the way out — the same thing [import] does for a failure, just
+     * later in the sequence.
+     */
+    suspend fun importStream(
+        source: InputStream,
+        bytes: Long,
+        groupIds: List<String> = emptyList(),
+        fallbackName: String? = null,
+    ): Result<Track> =
+        withContext(Dispatchers.IO) {
+            val id = UUID.randomUUID().toString()
+            val destination = files.fileFor(id)
+            try {
+                val iv = ByteArray(VaultCrypto.IV_LENGTH).also { SecureRandom().nextBytes(it) }
+                FileOutputStream(destination).use { raw ->
+                    raw.write(iv)
+                    CipherOutputStream(raw, VaultCrypto.encryptor(iv)).use { encrypted ->
+                        source.copyExactly(bytes, encrypted)
+                    }
+                }
+
+                val metadata = readVaultMetadata(destination, fallbackName)
+                    ?: throw IllegalArgumentException("Not a readable audio file")
+
+                val track = Track(
+                    id = id,
+                    title = metadata.title,
+                    artist = metadata.artist,
+                    album = metadata.album,
+                    trackNumber = metadata.trackNumber,
+                    year = metadata.year,
+                    durationMs = metadata.durationMs,
+                    addedAt = System.currentTimeMillis(),
+                    sortIndex = dao.maxSortIndex() + 1,
+                )
+                dao.insert(track)
+                groupIds.forEach { groups.tag(TrackGroup(id, it)) }
+                Result.success(track)
+            } catch (t: Throwable) {
+                destination.delete()
+                Log.w(TAG, "Streamed import failed", t)
+                Result.failure(t)
+            }
+        }
+
     suspend fun delete(track: Track) = withContext(Dispatchers.IO) {
         files.fileFor(track.id).delete()
         groups.untagEverywhere(track.id)
@@ -165,10 +224,30 @@ class VaultRepository(private val context: Context) {
         val durationMs: Long,
     )
 
-    private fun readMetadata(source: Uri, fallbackName: String?): AudioMetadata? {
+    private fun readMetadata(source: Uri, fallbackName: String?): AudioMetadata? =
+        tagsFrom(fallbackName, displayName = { displayNameOf(source) }) { openFor(it, source) }
+
+    /** Tags read back out of a file already in the vault, decrypted on the fly. */
+    private fun readVaultMetadata(file: File, fallbackName: String?): AudioMetadata? =
+        VaultMediaSource(file).use { reader ->
+            tagsFrom(fallbackName, displayName = { null }) { it.setDataSource(reader) }
+        }
+
+    /**
+     * The tag read itself, once something has said where the bytes are.
+     *
+     * [displayName] is the last resort for a title and is deliberately lazy: it is a
+     * `ContentResolver` query, and it is only worth making for a file that turned out to have no
+     * title tag of its own.
+     */
+    private fun tagsFrom(
+        fallbackName: String?,
+        displayName: () -> String?,
+        open: (MediaMetadataRetriever) -> Unit,
+    ): AudioMetadata? {
         val retriever = MediaMetadataRetriever()
         return try {
-            openFor(retriever, source)
+            open(retriever)
             val hasAudio = retriever
                 .extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO) == "yes"
             if (!hasAudio) return null
@@ -176,7 +255,7 @@ class VaultRepository(private val context: Context) {
             AudioMetadata(
                 title = retriever.string(MediaMetadataRetriever.METADATA_KEY_TITLE)
                     ?: fallbackName?.substringBeforeLast('.')
-                    ?: displayNameOf(source),
+                    ?: displayName(),
                 artist = retriever.string(MediaMetadataRetriever.METADATA_KEY_ARTIST)
                     ?: retriever.string(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST),
                 album = retriever.string(MediaMetadataRetriever.METADATA_KEY_ALBUM),
@@ -188,7 +267,7 @@ class VaultRepository(private val context: Context) {
                     ?.toLongOrNull() ?: 0L,
             )
         } catch (t: Throwable) {
-            Log.w(TAG, "Could not read metadata from $source", t)
+            Log.w(TAG, "Could not read metadata", t)
             null
         } finally {
             retriever.release()
@@ -232,4 +311,35 @@ class VaultRepository(private val context: Context) {
 
     private fun MediaMetadataRetriever.string(key: Int): String? =
         extractMetadata(key)?.trim()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * Moves exactly [bytes] into [sink], and refuses to be short-changed.
+     *
+     * The source is a keep-alive socket. Reading past the end of the body would eat the head of
+     * the next request; stopping short would leave this body's tail to be read as one. Either
+     * mistake corrupts the connection rather than just this file, so the count is a contract and
+     * a stream that ends early is an error.
+     */
+    private fun InputStream.copyExactly(bytes: Long, sink: OutputStream) {
+        require(bytes >= 0) { "byte count must not be negative" }
+        val buffer = ByteArray(STREAM_BUFFER)
+        var remaining = bytes
+        while (remaining > 0) {
+            val read = read(buffer, 0, minOf(remaining, buffer.size.toLong()).toInt())
+            if (read < 0) error("Stream ended $remaining bytes early")
+            sink.write(buffer, 0, read)
+            remaining -= read
+        }
+    }
+
+    private companion object {
+        /**
+         * Eight times [DEFAULT_BUFFER_SIZE], which is what a plain `copyTo` would use.
+         *
+         * Every buffer costs a socket read, a cipher update that allocates its own output array,
+         * and a write. At 8 KB a 20 MB upload pays for all three two and a half thousand times
+         * over; a larger buffer is the cheapest thing available here.
+         */
+        const val STREAM_BUFFER = 64 * 1024
+    }
 }
