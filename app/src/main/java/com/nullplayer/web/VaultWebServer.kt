@@ -28,7 +28,6 @@ private const val TAG = "VaultWebServer"
 /** Enough to reach the `ftyp` box of an MP4, which is the deepest marker looked for. */
 private const val SNIFF_BYTES = 16
 
-
 /** Characters no filesystem, and no `Content-Disposition` header, should have to carry. */
 private fun sanitised(raw: String): String =
     raw.map { if (it.isISOControl() || it in FORBIDDEN) '_' else it }.joinToString("")
@@ -97,6 +96,8 @@ class VaultWebServer(
     /** Shown on the phone, typed into the browser once. Regenerated every time the server starts. */
     val pin: String = "%06d".format(SecureRandom().nextInt(1_000_000))
 
+    private val vault = VaultFiles(context)
+
     /**
      * Live sessions, each against the moment it was last heard from.
      *
@@ -105,8 +106,6 @@ class VaultWebServer(
      * timestamp instead lets a session age out, which is what makes "active" mean present rather
      * than merely admitted at some point.
      */
-    private val vault = VaultFiles(context)
-
     private val sessions = ConcurrentHashMap<String, Long>()
     private val random = SecureRandom()
 
@@ -229,6 +228,17 @@ class VaultWebServer(
 
     // -- Endpoints --------------------------------------------------------------------------
 
+    /**
+     * A filename worth using, or null.
+     *
+     * A multipart part header declares no charset, so NanoHTTPD decodes it as US-ASCII and every
+     * byte of a UTF-8 filename comes back as U+FFFD. That is unusable as a title — and worse than
+     * having no name at all, because it would be stored and shown — so anything carrying a
+     * replacement character is refused and the caller falls back to what the file itself says.
+     */
+    private fun readableName(raw: String?): String? =
+        raw?.takeIf { it.isNotBlank() && !it.contains('�') }
+
     private fun tracksPayload(): JSONObject {
         val vaultId = activeVaultId()
         val tracks = runBlocking { repository.tracks(vaultId) }
@@ -247,11 +257,16 @@ class VaultWebServer(
         var imported = 0
         val failed = JSONArray()
 
+        // Preferred over the multipart filename because it is percent-encoded UTF-8; see
+        // [readableName]. Absent for a client that posts the form directly rather than through
+        // the page.
+        val declaredName = readableName(session.parameters["name"]?.firstOrNull())
+
         for ((field, temporaryPath) in parts) {
             if (!field.startsWith("file")) continue
             val temporary = File(temporaryPath)
-            // The browser sends the real filename in a parallel parameter of the same name.
-            val originalName = session.parameters[field]?.firstOrNull()
+            val originalName = declaredName
+                ?: readableName(session.parameters[field]?.firstOrNull())
 
             val result = runBlocking {
                 repository.import(

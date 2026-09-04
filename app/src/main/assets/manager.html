@@ -292,7 +292,10 @@
       form.append('file', file, file.name);
 
       var request = new XMLHttpRequest();
-      request.open('POST', '/api/upload');
+      // The name rides in the query string, percent-encoded. A multipart part header carries no
+      // charset, so a non-ASCII filename in there arrives as replacement characters; the query
+      // string is decoded as UTF-8 and survives.
+      request.open('POST', '/api/upload?name=' + encodeURIComponent(file.name));
       request.withCredentials = true;
 
       request.upload.addEventListener('progress', function (event) {
