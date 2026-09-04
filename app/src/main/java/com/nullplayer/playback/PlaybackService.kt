@@ -408,8 +408,19 @@ class PlaybackService : MediaSessionService() {
             enableAudioTrackPlaybackParams: Boolean,
         ): AudioSink = DefaultAudioSink.Builder(context)
             .setAudioProcessors(arrayOf(equalizer))
-            // Float output would hand the processor an encoding it declines, silently taking the
-            // equalizer out of the chain, so the sink is held to 16-bit.
+            // Left off after measuring what turning it on actually does here.
+            //
+            // The sink offers an app's processors either 16-bit or float, never the source's own
+            // encoding, and the converter that decides which runs ahead of them. Off, a 24-bit
+            // 96 kHz track reaches the equalizer as 16-bit at its full 96 kHz and every filter
+            // runs. On, the same track never reaches the equalizer at all — the pipeline is not
+            // configured, and the curve silently stops applying to exactly the files someone
+            // enabling this would care most about.
+            //
+            // So the depth is spent to keep the effect, which is the right way round: the
+            // equalizer itself no longer refuses float, so this is a statement about the sink
+            // rather than about what the processor can do, and it is one flag to flip on a
+            // platform where that path behaves.
             .setEnableFloatOutput(false)
             .build()
     }

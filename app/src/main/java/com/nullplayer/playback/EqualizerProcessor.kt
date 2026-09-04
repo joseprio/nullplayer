@@ -58,9 +58,9 @@ class EqualizerProcessor : BaseAudioProcessor() {
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat):
         AudioProcessor.AudioFormat {
-        // 16-bit is what the default sink hands us. Anything else passes through untouched rather
-        // than being refused, which would fail the whole playback rather than just the effect.
-        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT) {
+        // Anything else passes through untouched rather than being refused, which would fail the
+        // whole playback rather than just the effect.
+        if (!handles(inputAudioFormat.encoding)) {
             return AudioProcessor.AudioFormat.NOT_SET
         }
         config = null
@@ -79,7 +79,19 @@ class EqualizerProcessor : BaseAudioProcessor() {
      * So it stays in the chain and copies its input through when there is nothing to apply. A
      * memcpy per buffer is a very cheap price for the setting taking effect when it is changed.
      */
-    override fun isActive(): Boolean = inputAudioFormat.encoding == C.ENCODING_PCM_16BIT
+    override fun isActive(): Boolean = handles(inputAudioFormat.encoding)
+
+    /**
+     * The two encodings that can actually arrive here, and both are handled.
+     *
+     * The sink decides between an integer and a floating-point path per track, and puts a
+     * converter at the head of whichever it picks: `ToInt16PcmAudioProcessor` on one side,
+     * `ToFloatPcmAudioProcessor` on the other. Both run before anything the app adds, so whatever
+     * the file was encoded at — 8-bit, 24-bit, 32-bit — it is one of these two by the time it
+     * reaches us, and there is no third case worth writing code for.
+     */
+    private fun handles(encoding: Int): Boolean =
+        encoding == C.ENCODING_PCM_16BIT || encoding == C.ENCODING_PCM_FLOAT
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         val frames = inputBuffer.remaining() / inputAudioFormat.bytesPerFrame
@@ -89,21 +101,45 @@ class EqualizerProcessor : BaseAudioProcessor() {
         val active = configure()
         val output = replaceOutputBuffer(frames * inputAudioFormat.bytesPerFrame)
 
-        // The sink hands over native-order bytes; reading them as shorts avoids reassembling
-        // every sample by hand.
-        val input = inputBuffer.order(ByteOrder.nativeOrder()).asShortBuffer()
+        // The sink hands over native-order bytes; reading them through a typed view avoids
+        // reassembling every sample by hand.
+        inputBuffer.order(ByteOrder.nativeOrder())
         output.order(ByteOrder.nativeOrder())
 
-        if (active == null) {
-            while (input.hasRemaining()) output.putShort(input.get())
+        // The maths is identical either way — the cascade works in Double and is linear, so it
+        // neither knows nor cares what full scale is. Only the width of a sample differs, which is
+        // why this is two loops rather than one with a conversion in the middle: a 24-bit track
+        // deserves to reach the device as something better than the 16-bit it would be squashed to.
+        if (inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT) {
+            val input = inputBuffer.asFloatBuffer()
+            if (active == null) {
+                while (input.hasRemaining()) output.putFloat(input.get())
+            } else {
+                val cascade = active.cascade
+                val preamp = active.preamp
+                repeat(frames) {
+                    for (channel in 0 until channels) {
+                        val sample = input.get() * preamp
+                        val processed =
+                            if (cascade == null) sample else cascade.process(channel, sample)
+                        output.putFloat(clampFloat(processed))
+                    }
+                }
+            }
         } else {
-            val cascade = active.cascade
-            val preamp = active.preamp
-            repeat(frames) {
-                for (channel in 0 until channels) {
-                    val sample = input.get() * preamp
-                    val processed = if (cascade == null) sample else cascade.process(channel, sample)
-                    output.putShort(clamp(processed))
+            val input = inputBuffer.asShortBuffer()
+            if (active == null) {
+                while (input.hasRemaining()) output.putShort(input.get())
+            } else {
+                val cascade = active.cascade
+                val preamp = active.preamp
+                repeat(frames) {
+                    for (channel in 0 until channels) {
+                        val sample = input.get() * preamp
+                        val processed =
+                            if (cascade == null) sample else cascade.process(channel, sample)
+                        output.putShort(clamp(processed))
+                    }
                 }
             }
         }
@@ -135,7 +171,11 @@ class EqualizerProcessor : BaseAudioProcessor() {
             .map { BiquadCoefficients.of(it, inputAudioFormat.sampleRate) }
             .filter { it != BiquadCoefficients.PASSTHROUGH }
 
-        Log.i(TAG, "Curve applied: ${sections.size} sections at ${inputAudioFormat.sampleRate} Hz")
+        Log.i(
+            TAG,
+            "Curve applied: ${sections.size} sections at ${inputAudioFormat.sampleRate} Hz, " +
+                "encoding ${inputAudioFormat.encoding}",
+        )
         return Config(
             eq = eq,
             cascade = if (sections.isEmpty()) {
@@ -162,4 +202,7 @@ class EqualizerProcessor : BaseAudioProcessor() {
             else -> rounded.toShort()
         }
     }
+
+    /** The same saturation, against the unit full scale that float PCM is expressed in. */
+    private fun clampFloat(value: Double): Float = value.coerceIn(-1.0, 1.0).toFloat()
 }
