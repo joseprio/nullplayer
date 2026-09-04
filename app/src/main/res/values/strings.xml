@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">nullplayer</string>
+
+    <!--
+      The one content description that has to be a resource: the notification's speak button is
+      built in PlaybackService, where there is no composable to hold a literal. The rest live
+      beside the buttons they label, in the player.
+      Deliberately generic, like everything else here: nothing may name a track.
+    -->
+    <string name="cd_voiceover">Announce current track</string>
+</resources>

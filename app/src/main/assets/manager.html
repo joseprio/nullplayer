@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>nullplayer</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0b0d;
+    --panel: #141519;
+    --panel-2: #1a1b20;
+    --line: #26272d;
+    --text: #e8e8ea;
+    --muted: #8b8d94;
+    --accent: #43b061;
+    --danger: #c8563f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 40px 20px 80px; }
+
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 28px; }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .14em; margin: 0; }
+  .count { color: var(--muted); font-size: 13px; }
+  .logout { margin-left: auto; color: var(--muted); font-size: 13px; text-decoration: none; }
+  .logout:hover { color: var(--text); }
+
+  #drop {
+    border: 1px dashed var(--line); border-radius: 14px; background: var(--panel);
+    padding: 44px 20px; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #drop:hover { border-color: #3a3b42; }
+  #drop.over { border-color: var(--accent); background: #14211a; }
+  #drop h2 { font-size: 16px; font-weight: 500; margin: 0 0 6px; }
+  #drop p { color: var(--muted); font-size: 13px; margin: 0; }
+  #picker { display: none; }
+
+  #queue { margin-top: 18px; display: grid; gap: 8px; }
+  .job {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 11px 14px; font-size: 13px;
+  }
+  .job .row { display: flex; gap: 12px; align-items: center; }
+  .job .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .job .pct { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .job.failed .pct { color: var(--danger); }
+  .bar { height: 3px; border-radius: 2px; background: var(--line); margin-top: 9px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .12s; }
+
+  h3 { font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
+       color: var(--muted); margin: 38px 0 12px; font-weight: 600; }
+  ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line);
+       border-radius: 12px; overflow: hidden; }
+  li { display: flex; align-items: center; gap: 14px; padding: 13px 16px;
+       background: var(--panel); border-bottom: 1px solid var(--line); }
+  li:last-child { border-bottom: 0; }
+  li:nth-child(even) { background: var(--panel-2); }
+  .meta { flex: 1; min-width: 0; }
+  .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub { color: var(--muted); font-size: 13px; overflow: hidden;
+         text-overflow: ellipsis; white-space: nowrap; }
+  .dur { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .del { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+         font-size: 18px; line-height: 1; padding: 4px 6px; border-radius: 6px; }
+  .del:hover { color: var(--danger); background: #201316; }
+  .empty { color: var(--muted); padding: 26px 16px; background: var(--panel); text-align: center; }
+
+  /* Block, so the ellipsis the .title rule asks for actually applies to a link. */
+  a.title { display: block; color: inherit; text-decoration: none; }
+  a.title:hover, a.title:focus-visible { color: var(--accent); text-decoration: underline; }
+
+  #veil { position: fixed; inset: 0; background: rgba(0,0,0,.66); padding: 20px;
+          display: none; align-items: center; justify-content: center; }
+  #veil.on { display: flex; }
+  #ask { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+         padding: 22px; width: 100%; max-width: 380px; }
+  #ask h4 { margin: 0 0 8px; font-size: 16px; font-weight: 500; }
+  #ask p { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+  #ask .buttons { display: flex; gap: 8px; justify-content: flex-end; }
+  #ask button { border: 0; background: transparent; cursor: pointer; font-size: 14px;
+                padding: 9px 14px; border-radius: 8px; }
+  #ask button:hover { background: var(--panel-2); }
+  #cancel { color: var(--muted); }
+  #confirm { color: var(--danger); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>nullplayer</h1>
+    <span class="count" id="count"></span>
+    <a class="logout" href="/logout">Lock</a>
+  </header>
+
+  <div id="drop">
+    <h2>Drop audio files here</h2>
+    <p>or click to choose &mdash; they go straight into the vault</p>
+  </div>
+  <input type="file" id="picker" multiple accept="audio/*">
+
+  <div id="queue"></div>
+
+  <h3>In the vault</h3>
+  <ul id="list"><li class="empty">Loading&hellip;</li></ul>
+</div>
+
+<div id="veil">
+  <div id="ask" role="dialog" aria-modal="true" aria-labelledby="ask-title">
+    <h4 id="ask-title">Delete this track?</h4>
+    <p id="ask-body"></p>
+    <div class="buttons">
+      <button type="button" id="cancel">Cancel</button>
+      <button type="button" id="confirm">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var drop = document.getElementById('drop');
+  var picker = document.getElementById('picker');
+  var queue = document.getElementById('queue');
+  var list = document.getElementById('list');
+  var count = document.getElementById('count');
+
+  function text(value) {
+    var node = document.createElement('span');
+    node.textContent = value;
+    return node;
+  }
+
+  function duration(ms) {
+    var total = Math.round((ms || 0) / 1000);
+    var minutes = Math.floor(total / 60);
+    var seconds = total % 60;
+    return minutes + ':' + (seconds < 10 ? '0' : '') + seconds;
+  }
+
+  function megabytes(bytes) {
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  // -- Library ------------------------------------------------------------------
+
+  function refresh() {
+    return fetch('/api/tracks', { credentials: 'same-origin' })
+      .then(function (response) {
+        if (response.status === 401) { location.href = '/'; return null; }
+        return response.json();
+      })
+      .then(function (data) {
+        if (!data) return;
+        render(data.tracks || [], data.bytes || 0);
+      });
+  }
+
+  function render(tracks, bytes) {
+    count.textContent = tracks.length
+      ? tracks.length + (tracks.length === 1 ? ' track' : ' tracks') + ' · ' + megabytes(bytes)
+      : '';
+
+    list.textContent = '';
+    if (!tracks.length) {
+      var empty = document.createElement('li');
+      empty.className = 'empty';
+      empty.textContent = 'Nothing here yet.';
+      list.appendChild(empty);
+      return;
+    }
+
+    tracks.forEach(function (track) {
+      var row = document.createElement('li');
+
+      var meta = document.createElement('div');
+      meta.className = 'meta';
+
+      // The title is the download: the row already names the track, so there is nothing a
+      // separate button would add except another thing to aim at.
+      var title = document.createElement('a');
+      title.className = 'title';
+      title.href = '/api/download?id=' + encodeURIComponent(track.id);
+      title.setAttribute('download', '');
+      title.title = 'Download';
+      title.textContent = track.title || 'Untitled track';
+      meta.appendChild(title);
+
+      var parts = [];
+      if (track.artist) parts.push(track.artist);
+      if (track.album) parts.push(track.album);
+      if (parts.length) {
+        var sub = document.createElement('div');
+        sub.className = 'sub';
+        sub.textContent = parts.join(' · ');
+        meta.appendChild(sub);
+      }
+      row.appendChild(meta);
+
+      var dur = document.createElement('span');
+      dur.className = 'dur';
+      dur.textContent = duration(track.durationMs);
+      row.appendChild(dur);
+
+      var remove = document.createElement('button');
+      remove.className = 'del';
+      remove.type = 'button';
+      remove.title = 'Remove from the vault';
+      remove.textContent = '×';
+      remove.addEventListener('click', function () { askToDelete(track); });
+      row.appendChild(remove);
+
+      list.appendChild(row);
+    });
+  }
+
+  // -- Deleting -----------------------------------------------------------------
+
+  // The vault is the only copy, so the question is asked before anything is removed — the same
+  // promise the phone's own screen makes.
+  var veil = document.getElementById('veil');
+  var askBody = document.getElementById('ask-body');
+  var confirmButton = document.getElementById('confirm');
+  var doomed = null;
+
+  function askToDelete(track) {
+    doomed = track;
+    askBody.textContent = (track.title || 'Untitled track') +
+      ' will be deleted from the vault. There is no copy anywhere else.';
+    veil.classList.add('on');
+    confirmButton.focus();
+  }
+
+  function closeAsk() {
+    veil.classList.remove('on');
+    doomed = null;
+  }
+
+  document.getElementById('cancel').addEventListener('click', closeAsk);
+  veil.addEventListener('click', function (event) {
+    if (event.target === veil) closeAsk();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && veil.classList.contains('on')) closeAsk();
+  });
+
+  confirmButton.addEventListener('click', function () {
+    if (!doomed) return;
+    var id = doomed.id;
+    closeAsk();
+    fetch('/api/delete', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: id })
+    }).then(refresh);
+  });
+
+  // -- Uploading ----------------------------------------------------------------
+
+  // One request per file: the phone gets a steady stream of small writes instead of
+  // one enormous body, and each row can show its own progress.
+  function upload(file) {
+    var job = document.createElement('div');
+    job.className = 'job';
+
+    var row = document.createElement('div');
+    row.className = 'row';
+    var name = text(file.name);
+    name.className = 'name';
+    var pct = text('0%');
+    pct.className = 'pct';
+    row.appendChild(name);
+    row.appendChild(pct);
+    job.appendChild(row);
+
+    var bar = document.createElement('div');
+    bar.className = 'bar';
+    var fill = document.createElement('i');
+    bar.appendChild(fill);
+    job.appendChild(bar);
+    queue.appendChild(job);
+
+    return new Promise(function (resolve) {
+      var form = new FormData();
+      form.append('file', file, file.name);
+
+      var request = new XMLHttpRequest();
+      request.open('POST', '/api/upload');
+      request.withCredentials = true;
+
+      request.upload.addEventListener('progress', function (event) {
+        if (!event.lengthComputable) return;
+        var percent = Math.round((event.loaded / event.total) * 100);
+        fill.style.width = percent + '%';
+        pct.textContent = percent + '%';
+      });
+
+      request.addEventListener('load', function () {
+        var ok = false;
+        try {
+          ok = request.status === 200 && JSON.parse(request.responseText).imported > 0;
+        } catch (e) { ok = false; }
+
+        if (ok) {
+          pct.textContent = 'done';
+          fill.style.width = '100%';
+          setTimeout(function () { job.remove(); }, 1400);
+        } else {
+          job.className = 'job failed';
+          pct.textContent = request.status === 401 ? 'locked' : 'failed';
+        }
+        resolve();
+      });
+
+      request.addEventListener('error', function () {
+        job.className = 'job failed';
+        pct.textContent = 'failed';
+        resolve();
+      });
+
+      request.send(form);
+    });
+  }
+
+  function uploadAll(files) {
+    var audio = Array.prototype.filter.call(files, function (file) {
+      return file.type.indexOf('audio') === 0 || /\.(mp3|m4a|aac|flac|ogg|opus|wav|mp4)$/i.test(file.name);
+    });
+    if (!audio.length) return;
+
+    // Sequential, so a dropped album does not open twenty sockets at once.
+    audio.reduce(function (chain, file) {
+      return chain.then(function () { return upload(file); }).then(refresh);
+    }, Promise.resolve());
+  }
+
+  // -- Drag and drop -------------------------------------------------------------
+
+  ['dragenter', 'dragover'].forEach(function (name) {
+    drop.addEventListener(name, function (event) {
+      event.preventDefault();
+      drop.classList.add('over');
+    });
+  });
+
+  ['dragleave', 'dragend'].forEach(function (name) {
+    drop.addEventListener(name, function () { drop.classList.remove('over'); });
+  });
+
+  drop.addEventListener('drop', function (event) {
+    event.preventDefault();
+    drop.classList.remove('over');
+    if (event.dataTransfer && event.dataTransfer.files) uploadAll(event.dataTransfer.files);
+  });
+
+  // Dropping anywhere but the zone should not make the browser navigate to the file.
+  window.addEventListener('dragover', function (event) { event.preventDefault(); });
+  window.addEventListener('drop', function (event) { event.preventDefault(); });
+
+  drop.addEventListener('click', function () { picker.click(); });
+  picker.addEventListener('change', function () {
+    uploadAll(picker.files);
+    picker.value = '';
+  });
+
+  // Tells the phone this tab is still open. Nothing else here polls, so without it a page left
+  // sitting on screen would age out of the connected count while somebody is still looking at it.
+  setInterval(function () {
+    fetch('/api/ping', { credentials: 'same-origin' }).catch(function () {});
+  }, 15000);
+
+  refresh();
+})();
+</script>
+</body>
+</html>
