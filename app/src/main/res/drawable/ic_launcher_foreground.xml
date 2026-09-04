@@ -6,24 +6,23 @@
     <!--
         The empty set, ∅, for the name.
 
-        Sized to reach about 27 from the centre of the 108 canvas. That is well inside the central
-        66 every launcher is guaranteed to show, and it leaves a ring of black around the mark
-        rather than crowding whatever mask the launcher happens to apply.
-
         The ring is two half arcs rather than one nearly-closed arc, so the stroke has no seam
-        where its ends meet.
+        where its ends meet. Its outer edge lands at 26 from the centre of the 108 canvas, inside
+        the central 66 every launcher is guaranteed to show.
     -->
     <path
-        android:pathData="M35.5,54 A18.5,18.5 0 1,1 72.5,54 A18.5,18.5 0 1,1 35.5,54"
+        android:pathData="M32,54 A22,22 0 1,1 76,54 A22,22 0 1,1 32,54"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="7" />
+        android:strokeWidth="8" />
     <!--
-        The slash runs past the ring at both ends, the way the symbol is written. Flat ends, not
-        round: a round cap on a stroke this thick reads as a knob stuck to the outside of the ring
-        rather than as a line passing through it.
+        The slash deliberately overruns the safe zone. A circular mask shows the central 72 of the
+        canvas — a circle of radius 36 — so ends placed just beyond that radius are clipped flush
+        to it, and the line reads as running from one side of the icon to the other. Kept flat
+        rather than round: a round cap on a stroke this thick reads as a knob on the end of the
+        line instead of a line that has been cut off by the edge.
     -->
     <path
-        android:pathData="M35,73 L73,35"
+        android:pathData="M27.5,80.5 L80.5,27.5"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="7" />
+        android:strokeWidth="8" />
 </vector>
