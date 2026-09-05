@@ -12,6 +12,7 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
+import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -37,6 +38,7 @@ import com.nullplayer.data.VaultFiles
 import com.nullplayer.data.VaultRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -67,6 +69,9 @@ class PlaybackService : MediaSessionService() {
     /** Cleared whenever the notification's controller is new, so it is always told once. */
     private var notificationControls: NotificationControls? = null
 
+    /** The loudness read for the current track, cancelled if the track changes under it. */
+    private var loudnessLookup: Job? = null
+
     /** The tile the queue is drawn from. Read from the audio thread's side of the session. */
     @Volatile
     private var sourceName: String = ""
@@ -85,12 +90,14 @@ class PlaybackService : MediaSessionService() {
         }
 
         // The equalizer is a link in the audio chain now rather than an effect bolted onto a
-        // session id, so it has to be handed to the renderers as the player is built.
+        // session id, so it has to be handed to the renderers as the player is built. Volume
+        // normalisation is a second link in the same chain, for the same reason.
         val equalizer = EqualizerProcessor()
-        AudioEffects.attach(equalizer)
+        val gain = GainProcessor()
+        AudioEffects.attach(equalizer, gain)
 
         val exoPlayer = ExoPlayer.Builder(this)
-            .setRenderersFactory(EqualizedRenderers(this, equalizer))
+            .setRenderersFactory(EqualizedRenderers(this, equalizer, gain))
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(VaultDataSource.Factory(VaultFiles(this)))
             )
@@ -135,6 +142,7 @@ class PlaybackService : MediaSessionService() {
         watchNotificationControls()
         watchSleepTimer()
         watchEqualizer()
+        watchNormalization()
         watchVoice()
     }
 
@@ -419,6 +427,11 @@ class PlaybackService : MediaSessionService() {
             if (!playWhenReady) PlaybackGate.relockPlayback()
         }
 
+        /** Every track brings its own level with it, so the gain is re-read on every change. */
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            applyLoudness(mediaItem?.mediaId)
+        }
+
         /**
          * The other two things the play button's rule reads: whether the music is running, and
          * whether there is a queue at all. Media3 rebuilds the notification for neither on this
@@ -489,6 +502,39 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    /** Keeps volume normalisation in step with the stored setting. */
+    private fun watchNormalization() {
+        scope.launch {
+            settings.all
+                .map { it.normalizeVolume }
+                .distinctUntilChanged()
+                .collect { AudioEffects.setNormalization(it) }
+        }
+    }
+
+    /**
+     * Hands the gain stage the measurement for the track that just became current.
+     *
+     * The read is a database lookup, so it lands a few milliseconds into the track rather than
+     * exactly on its first sample — which the gain's own ramp absorbs. The same slack works the
+     * other way at a track boundary: the sink still holds the tail of the previous track when
+     * this fires, so the new level starts creeping in slightly before the new track does. At the
+     * ramp's length that is well under the gap between two songs, and the alternative — a gain
+     * carried per media item through a sink that has no notion of one — does not exist in Media3.
+     */
+    private fun applyLoudness(trackId: String?) {
+        loudnessLookup?.cancel()
+        loudnessLookup = scope.launch {
+            val track = trackId?.let { repository.track(it) }
+            val measured = track?.loudnessLufs?.let { lufs ->
+                // A peak that somehow went missing is read as full scale, which forbids any boost
+                // rather than permitting one that could clip.
+                Loudness(lufs = lufs, peak = track.peakAmplitude ?: 1.0)
+            }
+            AudioEffects.setTrackLoudness(measured)
+        }
+    }
+
     private data class EqualizerConfig(
         val enabled: Boolean,
         val autoEq: String,
@@ -505,13 +551,16 @@ class PlaybackService : MediaSessionService() {
     private class EqualizedRenderers(
         context: Context,
         private val equalizer: EqualizerProcessor,
+        private val gain: GainProcessor,
     ) : DefaultRenderersFactory(context) {
         override fun buildAudioSink(
             context: Context,
             enableFloatOutput: Boolean,
             enableAudioTrackPlaybackParams: Boolean,
         ): AudioSink = DefaultAudioSink.Builder(context)
-            .setAudioProcessors(arrayOf(equalizer))
+            // Normalisation first: a track pulled down to the target reaches the curve with room
+            // for its boosts, where the same attenuation after the curve would arrive too late.
+            .setAudioProcessors(arrayOf(gain, equalizer))
             // Left off after measuring what turning it on actually does here.
             //
             // The sink offers an app's processors either 16-bit or float, never the source's own

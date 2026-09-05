@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [Track::class, Group::class, TrackGroup::class],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class VaultDatabase : RoomDatabase() {
@@ -130,6 +130,21 @@ abstract class VaultDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Version 4 gives every track somewhere to record how loud it is.
+         *
+         * Both columns are left null, which is exactly what they mean: nothing has been measured
+         * yet. The sweep behind volume normalisation reads that null as its work queue, so an
+         * existing vault backfills itself the first time the setting is switched on rather than
+         * needing anything done to it here.
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tracks ADD COLUMN loudnessLufs REAL")
+                db.execSQL("ALTER TABLE tracks ADD COLUMN peakAmplitude REAL")
+            }
+        }
+
         fun get(context: Context): VaultDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -138,7 +153,7 @@ abstract class VaultDatabase : RoomDatabase() {
                     // Lives under /data/data/<pkg>/databases, which no other app can read.
                     "vault.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

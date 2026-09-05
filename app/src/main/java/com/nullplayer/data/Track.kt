@@ -24,4 +24,13 @@ data class Track(
     val addedAt: Long,
     /** Playback order in the vault. */
     val sortIndex: Int,
+    /**
+     * Integrated loudness in LUFS, or null while the file is still waiting to be measured.
+     *
+     * Nullable rather than zeroed, because "not measured yet" and "measured, and it is silence"
+     * are different answers and only one of them is worth queueing another scan for.
+     */
+    val loudnessLufs: Double? = null,
+    /** The loudest sample in the file against a full scale of 1.0. Null alongside [loudnessLufs]. */
+    val peakAmplitude: Double? = null,
 )

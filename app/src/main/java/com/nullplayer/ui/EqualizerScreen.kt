@@ -65,6 +65,11 @@ import com.nullplayer.playback.PlayerUiState
  * that ten fixed faders cannot represent, so rather than draw a curve that is not the one playing,
  * the profile is listed where the faders would be — under the same heading, because it is the same
  * question answered a different way.
+ *
+ * Volume normalisation sits at the foot of the screen and is the one thing here the title bar's
+ * switch does not govern. It belongs on this screen because it is the other half of what the app
+ * does to the sound on its way out, but it is not part of the curve: it needs no bands, and
+ * levelling a library is a thing plenty of people want without any colouring at all.
  */
 @Composable
 fun EqualizerScreen(
@@ -76,6 +81,7 @@ fun EqualizerScreen(
     onAutoEq: (String) -> Unit,
     onClearAutoEq: () -> Unit,
     onDismissAutoEqError: () -> Unit,
+    onNormalizeVolume: (Boolean) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -105,7 +111,7 @@ fun EqualizerScreen(
         ) {
             item {
                 // The switch rides the title bar rather than sitting in a panel of its own: it
-                // governs everything below it, and a screen whose first row is a control for the
+                // governs the curve below it, and a screen whose first row is a control for the
                 // rest of the screen reads as one more setting among them.
                 ScreenHeader(onBack = onClose) {
                     Text(
@@ -192,6 +198,24 @@ fun EqualizerScreen(
                     }
                 }
             }
+
+            item { SectionHeader("Volume normalization") }
+            item {
+                Panel {
+                    // Deliberately not disabled when the equalizer is off. This is the one control
+                    // here that does not touch the curve, and tying it to the master switch would
+                    // make a flat, levelled library impossible to ask for.
+                    ToggleRow(
+                        title = "Match track volume",
+                        subtitle = normalizationStatus(
+                            enabled = state.settings.normalizeVolume,
+                            unmeasured = state.unmeasuredTracks,
+                        ),
+                        checked = state.settings.normalizeVolume,
+                        onCheckedChange = onNormalizeVolume,
+                    )
+                }
+            }
         }
     }
 
@@ -210,6 +234,20 @@ fun EqualizerScreen(
             },
         )
     }
+}
+
+/**
+ * The line under the switch, which is where the delay is explained.
+ *
+ * Levelling needs every track measured, and measuring means decoding, so a library switched on for
+ * the first time is not levelled for the first few minutes. Saying how many are left turns that
+ * into something visibly finishing rather than a setting that appears not to work yet.
+ */
+private fun normalizationStatus(enabled: Boolean, unmeasured: Int): String = when {
+    enabled && unmeasured == 1 -> "Measuring the last track…"
+    enabled && unmeasured > 0 -> "Measuring $unmeasured tracks…"
+    enabled -> "Every track plays at the same loudness."
+    else -> "Play every track at the same loudness."
 }
 
 /** Where a profile is pasted. Text only — there is no picker for something that arrives copied. */

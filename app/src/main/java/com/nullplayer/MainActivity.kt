@@ -294,6 +294,7 @@ class MainActivity : FragmentActivity() {
                                 onAutoEq = viewModel::setAutoEq,
                                 onClearAutoEq = viewModel::clearAutoEq,
                                 onDismissAutoEqError = viewModel::dismissAutoEqError,
+                                onNormalizeVolume = viewModel::setNormalizeVolume,
                                 onClose = { screen = Screen.PLAYER },
                             )
                         }

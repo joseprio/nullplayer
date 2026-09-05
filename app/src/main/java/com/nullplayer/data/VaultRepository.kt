@@ -200,6 +200,21 @@ class VaultRepository(private val context: Context) {
             }
         }
 
+    // -- Loudness -----------------------------------------------------------------------------
+
+    /**
+     * Everything that has never been measured. The sweep that drains this lives in
+     * [com.nullplayer.playback.LoudnessScanner], because measuring means decoding and decoding is
+     * the audio side's business.
+     */
+    suspend fun unmeasured(): List<Track> = withContext(Dispatchers.IO) { dao.unmeasured() }
+
+    fun observeUnmeasured(): Flow<List<String>> = dao.observeUnmeasured()
+
+    suspend fun setLoudness(id: String, lufs: Double, peak: Double) = withContext(Dispatchers.IO) {
+        dao.setLoudness(id, lufs, peak)
+    }
+
     suspend fun delete(track: Track) = withContext(Dispatchers.IO) {
         files.fileFor(track.id).delete()
         groups.untagEverywhere(track.id)

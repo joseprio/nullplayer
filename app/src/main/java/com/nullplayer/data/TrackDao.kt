@@ -49,6 +49,29 @@ interface TrackDao {
     @Query("SELECT COALESCE(MAX(sortIndex), -1) FROM tracks")
     suspend fun maxSortIndex(): Int
 
+    /**
+     * Everything still waiting to be measured, oldest arrival first.
+     *
+     * The whole list rather than a page of it: the sweep skips anything that failed to decode this
+     * session, and a page could be filled entirely with those while measurable tracks sat behind
+     * it.
+     */
+    @Query("SELECT * FROM tracks WHERE loudnessLufs IS NULL ORDER BY addedAt ASC")
+    suspend fun unmeasured(): List<Track>
+
+    /**
+     * The same queue, watched.
+     *
+     * Ids rather than a count, because the sweep has to be able to discount the ones it has
+     * already found it cannot read — a count would leave the screen reporting work that is never
+     * going to happen.
+     */
+    @Query("SELECT id FROM tracks WHERE loudnessLufs IS NULL")
+    fun observeUnmeasured(): Flow<List<String>>
+
+    @Query("UPDATE tracks SET loudnessLufs = :lufs, peakAmplitude = :peak WHERE id = :id")
+    suspend fun setLoudness(id: String, lufs: Double, peak: Double)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(track: Track)
 

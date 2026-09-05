@@ -47,6 +47,15 @@ data class AppSettings(
     val equalizerBands: List<Int> = emptyList(),
     /** An AutoEQ ParametricEQ config, verbatim. Blank means the faders define the curve. */
     val equalizerAutoEq: String = "",
+    /**
+     * Play every track at the same loudness.
+     *
+     * Independent of [equalizerEnabled] despite living on the same screen: it needs no curve, and
+     * someone who wants their library levelled but not coloured should not have to switch the
+     * equalizer on to get it. It is also what gates the measuring sweep, so nothing is decoded in
+     * the background for a feature that is switched off.
+     */
+    val normalizeVolume: Boolean = false,
     /** Which tile the ribbon has selected. Blank is the whole vault. */
     val activeGroupId: String = "",
     val showSeeker: Boolean = true,
@@ -82,6 +91,7 @@ class Settings(private val context: Context) {
             equalizerPreset = prefs[EQ_PRESET] ?: -1,
             equalizerBands = decodeBands(prefs[EQ_BANDS]),
             equalizerAutoEq = prefs[EQ_AUTOEQ].orEmpty(),
+            normalizeVolume = prefs[NORMALIZE_VOLUME] ?: false,
             activeGroupId = prefs[ACTIVE_GROUP].orEmpty(),
             showSeeker = prefs[SHOW_SEEKER] ?: true,
             showRemainingTime = prefs[SHOW_REMAINING_TIME] ?: true,
@@ -120,6 +130,8 @@ class Settings(private val context: Context) {
 
     suspend fun setEqualizerAutoEq(config: String) = put(EQ_AUTOEQ, config)
 
+    suspend fun setNormalizeVolume(normalize: Boolean) = put(NORMALIZE_VOLUME, normalize)
+
     suspend fun setEqualizerBands(bands: List<Int>) =
         put(EQ_BANDS, bands.joinToString(","))
 
@@ -154,6 +166,7 @@ class Settings(private val context: Context) {
         val EQ_PRESET = intPreferencesKey("equalizer_preset")
         val EQ_BANDS = stringPreferencesKey("equalizer_bands")
         val EQ_AUTOEQ = stringPreferencesKey("equalizer_autoeq")
+        val NORMALIZE_VOLUME = booleanPreferencesKey("normalize_volume")
         val ACTIVE_GROUP = stringPreferencesKey("active_group")
         val SHOW_SEEKER = booleanPreferencesKey("show_seeker")
         val SHOW_REMAINING_TIME = booleanPreferencesKey("show_remaining_time")

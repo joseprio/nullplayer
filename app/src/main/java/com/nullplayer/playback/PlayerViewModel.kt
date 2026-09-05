@@ -39,6 +39,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -78,6 +80,8 @@ data class PlayerUiState(
     val equalizerCurve: ParametricEq = ParametricEq(),
     /** Why the last pasted config was refused, or null if it was fine. */
     val autoEqError: String? = null,
+    /** How many tracks volume normalisation has yet to measure. */
+    val unmeasuredTracks: Int = 0,
     val importsInFlight: Int = 0,
     val lastImportFailures: Int = 0,
     val settings: AppSettings = AppSettings(),
@@ -175,6 +179,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         onIntrusion = ::onWebServerIntrusion,
     )
     private val audioManager = application.getSystemService(AudioManager::class.java)
+    private val loudness = LoudnessScanner(repository)
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -304,6 +309,26 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             AudioEffects.curve.collect { curve ->
                 _state.update { it.copy(equalizerCurve = curve) }
             }
+        }
+        viewModelScope.launch {
+            loudness.remaining.collect { pending ->
+                _state.update { it.copy(unmeasuredTracks = pending) }
+            }
+        }
+        viewModelScope.launch {
+            // The measuring sweep, gated on the setting: decoding a whole library in the
+            // background is not something to do for a feature nobody has switched on, and the
+            // vault backfills itself the moment somebody does.
+            //
+            // The pending count is narrowed to "is there any" before it reaches here. Left as a
+            // number it would re-emit after every single track, and `collectLatest` would cancel
+            // the very sweep that produced the change.
+            combine(
+                settings.all.map { it.normalizeVolume }.distinctUntilChanged(),
+                loudness.remaining.map { it > 0 }.distinctUntilChanged(),
+            ) { normalizing, pending -> normalizing && pending }
+                .distinctUntilChanged()
+                .collectLatest { work -> if (work) loudness.drain() }
         }
         readVolume()
         observeVolume()
@@ -718,6 +743,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun dismissAutoEqError() {
         _state.update { it.copy(autoEqError = null) }
+    }
+
+    /**
+     * Levels every track to the same loudness.
+     *
+     * Switching it on is also what starts the measuring sweep, so a vault that has never been
+     * analysed begins working through itself here rather than at import time — which is why the
+     * screen says how much is left rather than claiming the setting took effect at once.
+     */
+    fun setNormalizeVolume(normalize: Boolean) {
+        viewModelScope.launch { settings.setNormalizeVolume(normalize) }
     }
 
     // -- The ticker -------------------------------------------------------------------------
