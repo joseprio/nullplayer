@@ -64,6 +64,9 @@ class PlaybackService : MediaSessionService() {
     @Volatile
     private var isSpeaking = false
 
+    /** Cleared whenever the notification's controller is new, so it is always told once. */
+    private var notificationControls: NotificationControls? = null
+
     /** The tile the queue is drawn from. Read from the audio thread's side of the session. */
     @Volatile
     private var sourceName: String = ""
@@ -129,6 +132,7 @@ class PlaybackService : MediaSessionService() {
         )
         watchSource()
         watchAudioPolicy()
+        watchNotificationControls()
         watchSleepTimer()
         watchEqualizer()
         watchVoice()
@@ -225,17 +229,22 @@ class PlaybackService : MediaSessionService() {
         override fun onConnect(
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
-        ): MediaSession.ConnectionResult {
-            val commands: SessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
-                .buildUpon()
-                .apply {
-                    VoiceCommands.ALL.forEach { add(SessionCommand(it, Bundle.EMPTY)) }
-                }
+        ): MediaSession.ConnectionResult =
+            MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                .setAvailableSessionCommands(sessionCommands(speakable = true))
                 .build()
 
-            return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
-                .setAvailableSessionCommands(commands)
-                .build()
+        /**
+         * The notification draws itself through a controller of its own, and that is the one held
+         * to the gate, so it is fitted out the moment it arrives.
+         */
+        override fun onPostConnect(
+            session: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ) {
+            if (!session.isMediaNotificationController(controller)) return
+            notificationControls = null
+            refreshNotificationControls()
         }
 
         override fun onCustomCommand(
@@ -245,15 +254,94 @@ class PlaybackService : MediaSessionService() {
             args: Bundle,
         ): ListenableFuture<SessionResult> {
             when (customCommand.customAction) {
-                VoiceCommands.SPEAK_TRACK ->
-                    speakTrack(args.getString(VoiceCommands.EXTRA_TRACK_ID))
-                VoiceCommands.SPEAK_POSITION -> speakPosition()
+                VoiceCommands.SPEAK_TRACK -> {
+                    val trackId = args.getString(VoiceCommands.EXTRA_TRACK_ID)
+                    // A press with no track named while it is talking is a stop, and stopping
+                    // is never refused — the same reason pausing never is.
+                    val stopping = trackId == null && isSpeaking
+                    if (stopping || PlaybackGate.allowVoiceOver()) speakTrack(trackId)
+                }
+                VoiceCommands.SPEAK_POSITION -> if (PlaybackGate.allowVoiceOver()) speakPosition()
                 VoiceCommands.STOP_SPEAKING -> voiceOver.stop()
                 else -> return Futures.immediateFuture(
                     SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED)
                 )
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+        }
+    }
+
+    // -- What the notification offers -----------------------------------------------------------
+
+    /**
+     * Puts the notification's buttons on the same terms as the ones on the player screen.
+     *
+     * The screen greys a refused button and still takes the press, because it has somewhere to
+     * print the reason. A notification has not, and Android draws no such thing as a greyed media
+     * action — so what it does instead is stop offering the control: a command the notification's
+     * controller was not given takes no press, and its button goes with it.
+     *
+     * This decides only what the notification draws. [GuardedPlayer] and [VoiceOverCallback] still
+     * refuse on their own, which is what holds a Bluetooth remote and a car head unit — neither
+     * of which reads any of this — to the same rules.
+     */
+    private fun refreshNotificationControls() {
+        val live = session ?: return
+        val notification = live.mediaNotificationControllerInfo ?: return
+
+        // Both halves are re-read on every track change, and pushing a value that has not moved
+        // would rebuild the notification for nothing.
+        val wanted = NotificationControls(playable(), PlaybackGate.state.value.outputSatisfied)
+        if (wanted == notificationControls) return
+        notificationControls = wanted
+        val speakable = wanted.speakable
+
+        live.setAvailableCommands(
+            notification,
+            sessionCommands(speakable),
+            MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS
+                .buildUpon()
+                .removeIf(Player.COMMAND_PLAY_PAUSE, !playable())
+                .build(),
+        )
+        live.setCustomLayout(notification, if (speakable) listOf(speakButton()) else emptyList())
+    }
+
+    /**
+     * The player screen's rule for the play button, answered from the service's side.
+     *
+     * Pausing is never refused, so a player that is running keeps its button whatever else is
+     * true: a gate that could trap the music playing would be worse than no gate at all.
+     */
+    private fun playable(): Boolean {
+        val current = player ?: return false
+        if (current.isPlaying) return true
+        return current.mediaItemCount > 0 && PlaybackGate.state.value.outputSatisfied
+    }
+
+    /** What the notification was last told it could do. */
+    private data class NotificationControls(val playable: Boolean, val speakable: Boolean)
+
+    /** VoiceOver's commands are withheld from a controller that is not allowed to speak. */
+    private fun sessionCommands(speakable: Boolean): SessionCommands =
+        MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+            .buildUpon()
+            .apply {
+                VoiceCommands.ALL.forEach { add(SessionCommand(it, Bundle.EMPTY)) }
+                if (!speakable) {
+                    remove(SessionCommand(VoiceCommands.SPEAK_TRACK, Bundle.EMPTY))
+                    remove(SessionCommand(VoiceCommands.SPEAK_POSITION, Bundle.EMPTY))
+                }
+            }
+            .build()
+
+    /** Redraws the notification's buttons whenever anything their rules read has moved. */
+    private fun watchNotificationControls() {
+        scope.launch {
+            PlaybackGate.state
+                .map { it.outputSatisfied }
+                .distinctUntilChanged()
+                .collect { refreshNotificationControls() }
         }
     }
 
@@ -329,6 +417,22 @@ class PlaybackService : MediaSessionService() {
     private inner class PlaybackTicket : Player.Listener {
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
             if (!playWhenReady) PlaybackGate.relockPlayback()
+        }
+
+        /**
+         * The other two things the play button's rule reads: whether the music is running, and
+         * whether there is a queue at all. Media3 rebuilds the notification for neither on this
+         * account, because neither changes what the *player* offers — only what this service
+         * has decided to pass on.
+         */
+        override fun onEvents(player: Player, events: Player.Events) {
+            if (events.containsAny(
+                    Player.EVENT_IS_PLAYING_CHANGED,
+                    Player.EVENT_TIMELINE_CHANGED,
+                )
+            ) {
+                refreshNotificationControls()
+            }
         }
     }
 

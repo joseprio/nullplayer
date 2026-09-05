@@ -26,6 +26,9 @@ object PlaybackGate {
         /** The required headset or output device is not connected. */
         OUTPUT_DEVICE,
 
+        /** The same device is missing, turning away VoiceOver rather than the music. */
+        VOICE_OVER_OUTPUT,
+
         /** Biometrics are required and have not been given for this stretch of playback. */
         BIOMETRIC,
     }
@@ -111,6 +114,20 @@ object PlaybackGate {
         val reason = blockReason()
         _blocked.value = reason
         return reason == null
+    }
+
+    /**
+     * The same check for VoiceOver, which the output rule covers too.
+     *
+     * VoiceOver is the one thing in this app that says a track's name out loud, so through the
+     * phone's own speaker it would read the title to whoever is in the room — the very thing
+     * "only play to headphones" was turned on to prevent. Biometrics are deliberately not
+     * consulted: they gate the music, and being told what is playing is not a way into the vault.
+     */
+    fun allowVoiceOver(): Boolean {
+        val satisfied = _state.value.outputSatisfied
+        if (!satisfied) _blocked.value = Block.VOICE_OVER_OUTPUT
+        return satisfied
     }
 
     /** Called only after a successful biometric prompt. */

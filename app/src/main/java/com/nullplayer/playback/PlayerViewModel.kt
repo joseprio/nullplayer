@@ -135,6 +135,22 @@ data class PlayerUiState(
             !outputSatisfied -> "Connect $requiredOutputLabel to play."
             else -> null
         }
+
+    /**
+     * Why pressing VoiceOver would be refused, or null if it would not.
+     *
+     * The same output rule as [playRefusal], for the same reason: VoiceOver is the only thing here
+     * that says a track's name aloud, and out of the phone's own speaker it would say it to the
+     * room. An empty queue is not a refusal — VoiceOver answers that with what the vault holds,
+     * which is exactly the moment it is worth asking. Stopping it is never refused either, so a
+     * press while it is talking answers null however the outputs stand.
+     */
+    val voiceOverRefusal: String?
+        get() = when {
+            isSpeaking -> null
+            !outputSatisfied -> "Connect $requiredOutputLabel for VoiceOver."
+            else -> null
+        }
     val shuffle: Boolean get() = settings.shuffle
     val repeat: RepeatMode get() = RepeatMode.ofOrdinal(settings.repeatOrdinal)
 
@@ -297,6 +313,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             PlaybackGate.blocked.collect { block ->
                 when (block) {
                     PlaybackGate.Block.OUTPUT_DEVICE -> notify(outputRequirementMessage())
+                    PlaybackGate.Block.VOICE_OVER_OUTPUT -> notify(voiceOverRequirementMessage())
                     PlaybackGate.Block.BIOMETRIC -> notify("Press play in the app to unlock.")
                     null -> return@collect
                 }
@@ -422,7 +439,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 _state.update { it.copy(awaitingPlayAuth = true) }
                 return
             }
-            null -> Unit
+            // blockReason() answers for playback alone. VoiceOver's refusal is recorded straight
+            // onto the gate by whoever pressed it, and never comes back out of here.
+            PlaybackGate.Block.VOICE_OVER_OUTPUT, null -> Unit
         }
         if (player.playbackState == Player.STATE_IDLE) player.prepare()
         player.play()
@@ -449,6 +468,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun outputRequirementMessage(): String =
         "Connect ${PlaybackGate.state.value.requiredOutputLabel} to play."
+
+    private fun voiceOverRequirementMessage(): String =
+        "Connect ${PlaybackGate.state.value.requiredOutputLabel} for VoiceOver."
 
     /** A line that shows itself for a few seconds and then gets out of the way. */
     private fun notify(message: String) {
@@ -485,6 +507,24 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             start(player)
             readPosition()
         }
+    }
+
+    /**
+     * Jump to a track by the number written on the hero readout, which counts from one.
+     *
+     * Whether the music is running carries across the jump untouched: this moves through the
+     * queue, it does not start anything. That also keeps it clear of the gate — a queue that was
+     * silent stays silent, so there is nothing here for a missing headset to refuse.
+     *
+     * The number is checked again rather than trusted. The dialog has already refused a bad one,
+     * but the queue can be rebuilt by an import or a deletion while the dialog is open.
+     */
+    fun goToTrack(number: Int) {
+        val player = controller ?: return
+        val index = number - 1
+        if (index !in 0 until player.mediaItemCount) return
+        player.seekTo(index, 0L)
+        readPosition()
     }
 
     fun next() {
@@ -759,6 +799,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
      * not be.
      */
     private fun announce(action: String, args: Bundle = Bundle.EMPTY) {
+        // Greyed for this, but still taking the press, exactly as the play button does: the
+        // service would turn the command away anyway, and a line saying what to plug in is worth
+        // more than a button that goes quiet without a reason.
+        _state.value.voiceOverRefusal?.let {
+            notify(it)
+            return
+        }
         if (_state.value.volume == 0) notify("Media volume is muted.")
         sendVoiceCommand(action, args)
     }

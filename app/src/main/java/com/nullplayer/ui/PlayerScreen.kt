@@ -5,6 +5,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -33,6 +34,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -41,7 +43,11 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -57,6 +63,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -70,6 +78,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -109,6 +119,15 @@ private val GLYPH_INSET = 7.dp
 private val CHIP_WIDTH = 188.dp
 private val CHIP_GAP = 12.dp
 
+/**
+ * The same fixed extent on the other axis, for the ribbon stood on its end in landscape.
+ *
+ * The horizontal ribbon gets this for free — every chip is [CHIP_WIDTH] wide whatever is written
+ * in it. Stood upright the scroll axis is the one the text grows along, so the height has to be
+ * pinned by hand, and it depends on whether there is a second line under the name.
+ */
+private fun chipHeight(showCounts: Boolean): Dp = if (showCounts) 72.dp else 52.dp
+
 /** Which of the inline panels, if any, is open under the button row. */
 private enum class Panel { NONE, VOLUME, TIMER }
 
@@ -116,9 +135,12 @@ private enum class Panel { NONE, VOLUME, TIMER }
  * The player.
  *
  * It fills whatever it is given rather than drawing a fixed-size object in the middle of the
- * screen: the ribbon and the progress bar stretch, the control rows stay put at the bottom, and
- * past a comfortable width the whole thing splits into two columns instead of growing a band of
- * empty space down the sides.
+ * screen: the ribbon and the progress bar stretch, and the control rows stay put at the bottom.
+ *
+ * Turned on its side it does not simply squash. The bars still run the whole width, but between
+ * them the screen splits: the ribbon takes the left half and stands upright, scrolling the way the
+ * screen is now long, and the track and its controls take the right. Which is the same two things
+ * the portrait layout stacks, put side by side instead of one above the other.
  *
  * Nothing here names a track. The hero readout is a queue position and a clock — the VoiceOver
  * button is still the only thing that will tell you what is playing.
@@ -132,6 +154,7 @@ fun PlayerScreen(
     onScrub: (Long) -> Unit,
     onSeek: (Float) -> Unit,
     onToggleTimeMode: () -> Unit,
+    onGoToTrack: (Int) -> Unit,
     onVoiceOver: () -> Unit,
     onVoiceOverLong: () -> Unit,
     onToggleShuffle: () -> Unit,
@@ -149,6 +172,7 @@ fun PlayerScreen(
 ) {
     var panel by remember { mutableStateOf(Panel.NONE) }
     var showAddress by remember { mutableStateOf(false) }
+    var goingToTrack by remember { mutableStateOf(false) }
 
     BoxWithConstraints(
         modifier = modifier
@@ -156,12 +180,22 @@ fun PlayerScreen(
             .background(BACKGROUND)
             .windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
-        // Two columns once there is room for both to breathe — a landscape phone, a tablet, or a
-        // freeform window.
-        val twoColumn = maxWidth >= 620.dp && maxWidth > maxHeight
+        // Wider than it is tall, with enough width that two halves are each still worth having:
+        // a landscape phone, a tablet, a freeform window. Below that the stack reads better than
+        // two cramped columns would.
+        val sideBySide = maxWidth > maxHeight && maxWidth >= 480.dp
 
         Column(
-            Modifier.fillMaxSize().padding(horizontal = SCREEN_PADDING, vertical = 12.dp)
+            Modifier.fillMaxSize().padding(
+                start = SCREEN_PADDING,
+                end = SCREEN_PADDING,
+                top = if (sideBySide) 6.dp else 12.dp,
+                // Height is the scarce direction on a landscape screen, and a margin under the
+                // button row only pushes it up out of the thumb's reach. What is left below it
+                // there is the system's own gesture area, which is as near the edge as anything
+                // meant to be tapped should get.
+                bottom = if (sideBySide) 0.dp else 12.dp,
+            )
         ) {
             TopBar(
                 state = state,
@@ -172,26 +206,30 @@ fun PlayerScreen(
                 onOpenSettings = onOpenSettings,
             )
 
-            Spacer(Modifier.height(12.dp))
-            VaultRibbon(
-                groups = state.groups,
-                vaultCount = state.vaultCount,
-                activeId = state.activeGroupId,
-                showCounts = state.settings.showVaultCounts,
-                onSelect = onSelectVault,
-                onOpen = onOpenVault,
-            )
-
-            if (twoColumn) {
-                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.weight(1f).fillMaxHeight(), Alignment.Center) {
-                        Hero(state)
-                    }
-                    Spacer(Modifier.width(32.dp))
+            if (sideBySide) {
+                Row(Modifier.weight(1f)) {
+                    // The ribbon keeps the whole left half to scroll through, so the tile in the
+                    // middle of it is the one across from the controls rather than up in a corner.
+                    VaultRibbon(
+                        groups = state.groups,
+                        vaultCount = state.vaultCount,
+                        activeId = state.activeGroupId,
+                        showCounts = state.settings.showVaultCounts,
+                        onSelect = onSelectVault,
+                        onOpen = onOpenVault,
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        upright = true,
+                    )
+                    Spacer(Modifier.width(24.dp))
                     Column(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
                         verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
+                        if (state.hasTracks) {
+                            Hero(state, compact = true) { goingToTrack = true }
+                            Spacer(Modifier.height(12.dp))
+                        }
                         Controls(
                             state = state,
                             onPlayPause = onPlayPause,
@@ -200,13 +238,24 @@ fun PlayerScreen(
                             onScrub = onScrub,
                             onSeek = onSeek,
                             onToggleTimeMode = onToggleTimeMode,
+                            compact = true,
                         )
                     }
                 }
             } else {
+                Spacer(Modifier.height(12.dp))
+                VaultRibbon(
+                    groups = state.groups,
+                    vaultCount = state.vaultCount,
+                    activeId = state.activeGroupId,
+                    showCounts = state.settings.showVaultCounts,
+                    onSelect = onSelectVault,
+                    onOpen = onOpenVault,
+                )
+
                 Spacer(Modifier.weight(1f))
                 if (state.hasTracks) {
-                    Hero(state)
+                    Hero(state) { goingToTrack = true }
                     Spacer(Modifier.height(30.dp))
                 }
                 Controls(
@@ -245,7 +294,21 @@ fun PlayerScreen(
                 onVoiceOverLong = onVoiceOverLong,
             )
 
-            Caption(state)
+            Caption(state, compact = sideBySide)
+        }
+
+        // Guarded on there being a queue as well as on the flag: the tile can be switched for
+        // an empty one from the ribbon while the dialog is open, and "go to track 1 of 0" is not
+        // a question worth leaving on the screen.
+        if (goingToTrack && state.hasTracks) {
+            GoToTrackDialog(
+                total = state.tracks.size,
+                onGo = { number ->
+                    onGoToTrack(number)
+                    goingToTrack = false
+                },
+                onDismiss = { goingToTrack = false },
+            )
         }
 
         val url = state.web.url
@@ -382,34 +445,132 @@ private fun TopBar(
 
 // -- The hero -----------------------------------------------------------------------------------
 
-/** Where you are in the queue, and nothing else. */
+/**
+ * Where you are in the queue, and nothing else.
+ *
+ * [compact] is the landscape size. The readout is still the largest thing on the screen, but a
+ * screen turned on its side has barely half the height to spend and the position is worth less
+ * than the controls under it — so this is what gives way first.
+ */
 @Composable
-private fun Hero(state: PlayerUiState) {
+private fun Hero(state: PlayerUiState, compact: Boolean = false, onClick: () -> Unit) {
     // An empty vault has no position to report, and saying so twice — here and on the greyed-out
     // transport below — is one line of chrome more than it is worth.
     if (!state.hasTracks) return
 
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text(
-            text = "TRACK",
-            color = MUTED,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 3.sp,
-        )
-        Spacer(Modifier.height(10.dp))
-        Text(
-            text = position(state),
-            color = TEXT,
-            fontSize = 46.sp,
-            fontWeight = FontWeight.Light,
-            fontFamily = FontFamily.Monospace,
-            letterSpacing = 1.sp,
-        )
+    // The readout stays centred on the screen while the target around it is only as wide as the
+    // mark: a press anywhere in the middle of the player should not move the queue.
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            // A number in a queue, so the one thing worth doing to it is typing a different one.
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .clickable(onClickLabel = "Go to a track", onClick = onClick)
+                .padding(horizontal = 28.dp, vertical = 6.dp),
+        ) {
+            Text(
+                text = "TRACK",
+                color = MUTED,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 3.sp,
+            )
+            Spacer(Modifier.height(if (compact) 6.dp else 10.dp))
+            Text(
+                text = position(state),
+                color = TEXT,
+                fontSize = if (compact) 34.sp else 46.sp,
+                fontWeight = FontWeight.Light,
+                fontFamily = FontFamily.Monospace,
+                letterSpacing = 1.sp,
+            )
+        }
     }
+}
+
+/**
+ * Jumping straight to a track by number.
+ *
+ * A number that is not in the queue is answered where it was typed rather than by closing: the
+ * dialog was opened to go somewhere, and shutting it on a typo would throw away the intent along
+ * with the mistake. Which is also why the field keeps what was typed — the fix is usually a digit.
+ */
+@Composable
+private fun GoToTrackDialog(
+    total: Int,
+    onGo: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var typed by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    val focus = remember { FocusRequester() }
+
+    // The dialog exists to take a number and nothing else, so the field is live and the keyboard
+    // is up as it appears: one tap on the readout, then type.
+    LaunchedEffect(Unit) { focus.requestFocus() }
+
+    fun submit() {
+        val number = typed.toIntOrNull()
+        error = when {
+            number == null -> "Type a track number."
+            number < 1 || number > total -> "There ${if (total == 1) "is" else "are"} only " +
+                "$total ${if (total == 1) "track" else "tracks"}."
+            else -> null
+        }
+        if (error == null && number != null) onGo(number)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = PANEL,
+        titleContentColor = TEXT,
+        textContentColor = MUTED,
+        title = { Text("Go to track") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = typed,
+                    // Filtered rather than merely validated. A number keyboard still offers a
+                    // comma, a minus and a space on some phones, and none of them could mean
+                    // anything here — so they never reach the field in the first place.
+                    onValueChange = { entry ->
+                        typed = entry.filter { it.isDigit() }.take(total.toString().length + 1)
+                        error = null
+                    },
+                    singleLine = true,
+                    isError = error != null,
+                    placeholder = { Text("1 – $total", color = MUTED) },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                        imeAction = ImeAction.Done,
+                    ),
+                    // The keyboard's own key does the same as the button, so a number can be
+                    // typed and gone to without the thumb ever leaving it.
+                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = TEXT,
+                        unfocusedTextColor = TEXT,
+                        focusedBorderColor = ACCENT,
+                        unfocusedBorderColor = LINE,
+                        errorBorderColor = DANGER,
+                        cursorColor = ACCENT,
+                    ),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                )
+                error?.let { message ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(text = message, color = DANGER, fontSize = 12.sp)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { submit() }) { Text("Go", color = ACCENT) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = MUTED) }
+        },
+    )
 }
 
 private fun position(state: PlayerUiState): String = when {
@@ -428,6 +589,7 @@ private fun Controls(
     onScrub: (Long) -> Unit,
     onSeek: (Float) -> Unit,
     onToggleTimeMode: () -> Unit,
+    compact: Boolean = false,
 ) {
     Column(Modifier.fillMaxWidth()) {
         Transport(
@@ -436,9 +598,10 @@ private fun Controls(
             onNext = onNext,
             onPrevious = onPrevious,
             onScrub = onScrub,
+            compact = compact,
         )
         if (state.settings.showSeeker) {
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(if (compact) 10.dp else 18.dp))
             Progress(state = state, onSeek = onSeek, onToggleTimeMode = onToggleTimeMode)
         }
     }
@@ -458,7 +621,7 @@ private data class Tile(
  * The vault tile is always there and always leads — it is everything in the library, and the one
  * selection that cannot go stale when a group is deleted. Groups follow in their own colours.
  *
- * Laid out as a carousel rather than a left-aligned row: tiles are a fixed width and the row is
+ * Laid out as a carousel rather than a left-aligned row: tiles are a fixed extent and the row is
  * padded by half a viewport either side, so the selected tile sits in the middle of the screen and
  * the first one is centred rather than pinned against the edge. Snapping means a flick lands on a
  * tile instead of between two.
@@ -467,6 +630,10 @@ private data class Tile(
  * middle of the screen is always the one playing and choosing costs one gesture instead of a
  * gesture and a tap. That leaves the tap itself free to mean "manage this one", which is the only
  * other thing a tile can do.
+ *
+ * [upright] turns the carousel through ninety degrees for the landscape layout. Only the axis
+ * changes: the same tiles, the same centre, the same swipe-to-select, scrolling down the left of
+ * the screen instead of across the top of it.
  */
 @OptIn(FlowPreview::class)
 @Composable
@@ -477,6 +644,8 @@ private fun VaultRibbon(
     showCounts: Boolean,
     onSelect: (String) -> Unit,
     onOpen: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    upright: Boolean = false,
 ) {
     val tiles = remember(groups, vaultCount) {
         buildList {
@@ -487,10 +656,13 @@ private fun VaultRibbon(
 
     val listState = rememberLazyListState()
 
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
+    BoxWithConstraints(modifier.then(if (upright) Modifier else Modifier.fillMaxWidth())) {
         // Half a row minus half a tile, which is what puts any tile — including the first and the
-        // last — in the centre when it is scrolled to the start of the content area.
-        val sidePadding = ((maxWidth - CHIP_WIDTH) / 2).coerceAtLeast(0.dp)
+        // last — in the centre when it is scrolled to the start of the content area. Measured
+        // along whichever axis the ribbon actually scrolls.
+        val tileExtent = if (upright) chipHeight(showCounts) else CHIP_WIDTH
+        val sidePadding = (((if (upright) maxHeight else maxWidth) - tileExtent) / 2)
+            .coerceAtLeast(0.dp)
 
         // The tile under the middle of the screen, tracked every frame. This is what the chips
         // colour themselves from, so the highlight lands the instant a tile crosses the centre
@@ -543,20 +715,43 @@ private fun VaultRibbon(
                 }
         }
 
-        LazyRow(
-            state = listState,
-            modifier = Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = sidePadding),
-            horizontalArrangement = Arrangement.spacedBy(CHIP_GAP),
-            flingBehavior = rememberSnapFlingBehavior(listState),
-        ) {
-            items(tiles, key = { it.id }) { tile ->
-                VaultChip(
-                    tile = tile,
-                    selected = tile.id == highlighted,
-                    showCount = showCounts,
-                    onClick = { onOpen(tile.id) },
-                )
+        // The two lists differ in their axis and nothing else — every decision above this point
+        // is shared, and `centredIndex` reads the scroll axis whichever one that is.
+        if (upright) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(vertical = sidePadding),
+                verticalArrangement = Arrangement.spacedBy(CHIP_GAP),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                flingBehavior = rememberSnapFlingBehavior(listState),
+            ) {
+                items(tiles, key = { it.id }) { tile ->
+                    VaultChip(
+                        tile = tile,
+                        selected = tile.id == highlighted,
+                        showCount = showCounts,
+                        onClick = { onOpen(tile.id) },
+                        height = tileExtent,
+                    )
+                }
+            }
+        } else {
+            LazyRow(
+                state = listState,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = sidePadding),
+                horizontalArrangement = Arrangement.spacedBy(CHIP_GAP),
+                flingBehavior = rememberSnapFlingBehavior(listState),
+            ) {
+                items(tiles, key = { it.id }) { tile ->
+                    VaultChip(
+                        tile = tile,
+                        selected = tile.id == highlighted,
+                        showCount = showCounts,
+                        onClick = { onOpen(tile.id) },
+                    )
+                }
             }
         }
     }
@@ -582,6 +777,8 @@ private fun VaultChip(
     selected: Boolean,
     showCount: Boolean,
     onClick: () -> Unit,
+    /** Pinned only in the upright ribbon, where the scroll axis is the one the text grows along. */
+    height: Dp? = null,
 ) {
     val colour = Color(tile.colorArgb)
     // Unselected tiles are the same colour laid over the page, so the text colour is decided
@@ -592,6 +789,7 @@ private fun VaultChip(
     Column(
         modifier = Modifier
             .width(CHIP_WIDTH)
+            .then(if (height != null) Modifier.height(height) else Modifier)
             .clip(RoundedCornerShape(14.dp))
             .background(fill)
             .border(
@@ -602,6 +800,7 @@ private fun VaultChip(
             .clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 14.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
     ) {
         Text(
             text = tile.name,
@@ -798,6 +997,7 @@ private fun Transport(
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onScrub: (Long) -> Unit,
+    compact: Boolean = false,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -810,7 +1010,7 @@ private fun Transport(
             onClick = onPrevious,
             onLongPress = { onScrub(-SCRUB_STEP_MS) },
             enabled = state.hasTracks,
-            size = 56.dp,
+            size = if (compact) 48.dp else 56.dp,
             glyphFraction = 0.30f,
         )
         // Greyed when play would be refused, but never disabled: the press is what produces the
@@ -822,7 +1022,7 @@ private fun Transport(
             contentDescription = if (state.isPlaying) "Pause" else "Play",
             onClick = onPlayPause,
             unavailable = refused,
-            size = 78.dp,
+            size = if (compact) 66.dp else 78.dp,
             glyphFraction = 0.26f,
             tint = BACKGROUND,
             background = if (refused) PANEL else ACCENT,
@@ -833,7 +1033,7 @@ private fun Transport(
             onClick = onNext,
             onLongPress = { onScrub(SCRUB_STEP_MS) },
             enabled = state.hasTracks,
-            size = 56.dp,
+            size = if (compact) 48.dp else 56.dp,
             glyphFraction = 0.30f,
         )
     }
@@ -893,12 +1093,16 @@ private fun Utilities(
             active = state.repeat != PlayerRepeatMode.OFF,
             glyphFraction = 0.36f,
         )
+        // Greyed on the same terms as play, and pressable for the same reason: saying a track's
+        // name out of the phone's own speaker is the thing "only play to headphones" exists to
+        // stop, and the press is what produces the line naming what to plug in.
         GlyphButton(
             glyph = VoiceOverGlyph,
             contentDescription = "Announce the current track",
             onClick = onVoiceOver,
             onLongPress = onVoiceOverLong,
             active = state.isSpeaking,
+            unavailable = state.voiceOverRefusal != null,
             glyphFraction = 0.40f,
         )
         GlyphButton(
@@ -1103,7 +1307,7 @@ internal fun Chip(
  * while the server is up, then the hint that gets a first-time user into the dock.
  */
 @Composable
-private fun Caption(state: PlayerUiState) {
+private fun Caption(state: PlayerUiState, compact: Boolean = false) {
     val web = state.web
     val caption: Pair<String, Color>? = when {
         state.notice != null -> state.notice to Color(0xFFC8A046)
@@ -1112,7 +1316,26 @@ private fun Caption(state: PlayerUiState) {
         else -> null
     }
 
-    Box(Modifier.fillMaxWidth().height(30.dp), contentAlignment = Alignment.Center) {
+    // Portrait holds the strip open even when it has nothing to say, so a notice arriving does
+    // not shove the button row up the screen.
+    //
+    // Landscape cannot afford the reservation: the row is already as near the bottom edge as the
+    // gesture area allows, and 20dp held empty is 20dp taken off the only thing that is short of
+    // it. So there the strip grows into place when there is something to read, which the animation
+    // turns from a jump into a slide.
+    val height by animateDpAsState(
+        targetValue = when {
+            !compact -> 30.dp
+            caption != null -> 22.dp
+            else -> 0.dp
+        },
+        label = "caption",
+    )
+
+    Box(
+        modifier = Modifier.fillMaxWidth().height(height),
+        contentAlignment = Alignment.Center,
+    ) {
         if (caption != null) {
             Text(
                 text = caption.first,

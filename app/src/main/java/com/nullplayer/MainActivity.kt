@@ -205,6 +205,7 @@ class MainActivity : FragmentActivity() {
                                 onScrub = viewModel::scrub,
                                 onSeek = viewModel::seekToFraction,
                                 onToggleTimeMode = viewModel::toggleTimeMode,
+                                onGoToTrack = viewModel::goToTrack,
                                 onVoiceOver = viewModel::announceCurrentTrack,
                                 onVoiceOverLong = viewModel::announceQueuePosition,
                                 onToggleShuffle = viewModel::toggleShuffle,
