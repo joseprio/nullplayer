@@ -248,6 +248,8 @@ class MainActivity : FragmentActivity() {
                                 onSetSleepTimer = viewModel::setSleepTimer,
                                 onToggleWebServer = viewModel::toggleWebServer,
                                 onOpenEqualizer = { screen = Screen.EQUALIZER },
+                                onReadSharedGroups = viewModel::readSharedGroups,
+                                onSetTag = viewModel::setTag,
                                 onSelectVault = viewModel::selectGroup,
                                 // Tapping a ribbon tile manages that tile. It reaches the same
                                 // named screen the dock does, so it passes the same prompt.

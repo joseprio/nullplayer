@@ -163,7 +163,16 @@ data class PlayerUiState(
      * heart on that track's row in the dock can never disagree — both are the same row.
      */
     val currentIsFavorite: Boolean
-        get() = tracks.getOrNull(trackIndex)?.favorite == true
+        get() = currentTrack?.favorite == true
+
+    /**
+     * The track the queue is standing on, or null when there is nothing to stand on.
+     *
+     * Read off the queue for the same reason [currentIsFavorite] is: one row, and everything that
+     * asks about the current track is asking about that row rather than about a copy of it.
+     */
+    val currentTrack: Track?
+        get() = tracks.getOrNull(trackIndex)
 
     /**
      * Why pressing play would be refused, or null if it would not.

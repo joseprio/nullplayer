@@ -90,6 +90,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nullplayer.data.Group
 import com.nullplayer.data.GroupSummary
+import com.nullplayer.data.Track
 import com.nullplayer.playback.PlayerUiState
 import com.nullplayer.playback.RepeatMode as PlayerRepeatMode
 import com.nullplayer.playback.SleepTimer
@@ -183,11 +184,14 @@ fun PlayerScreen(
     onOpenVault: (String) -> Unit,
     onOpenDock: () -> Unit,
     onOpenSettings: () -> Unit,
+    onReadSharedGroups: (List<Track>) -> Unit,
+    onSetTag: (List<Track>, String, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var panel by remember { mutableStateOf(Panel.NONE) }
     var showAddress by remember { mutableStateOf(false) }
     var goingToTrack by remember { mutableStateOf(false) }
+    var tagging by remember { mutableStateOf(false) }
 
     BoxWithConstraints(
         modifier = modifier
@@ -244,7 +248,12 @@ fun PlayerScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         if (state.hasTracks) {
-                            Hero(state, compact = true, onToggleFavorite = onToggleFavorite) { goingToTrack = true }
+                            Hero(
+                                state = state,
+                                compact = true,
+                                onToggleFavorite = onToggleFavorite,
+                                onTag = { tagging = true },
+                            ) { goingToTrack = true }
                             Spacer(Modifier.height(12.dp))
                         }
                         Controls(
@@ -274,7 +283,11 @@ fun PlayerScreen(
 
                 Spacer(Modifier.weight(1f))
                 if (state.hasTracks) {
-                    Hero(state, onToggleFavorite = onToggleFavorite) { goingToTrack = true }
+                    Hero(
+                        state = state,
+                        onToggleFavorite = onToggleFavorite,
+                        onTag = { tagging = true },
+                    ) { goingToTrack = true }
                     Spacer(Modifier.height(30.dp))
                 }
                 Controls(
@@ -319,6 +332,14 @@ fun PlayerScreen(
         // Guarded on there being a queue as well as on the flag: the tile can be switched for
         // an empty one from the ribbon while the dialog is open, and "go to track 1 of 0" is not
         // a question worth leaving on the screen.
+        TagDialogFor(
+            state = state,
+            showing = tagging,
+            onReadSharedGroups = onReadSharedGroups,
+            onSetTag = onSetTag,
+            onDismiss = { tagging = false },
+        )
+
         if (goingToTrack && state.hasTracks) {
             GoToTrackDialog(
                 total = state.tracks.size,
@@ -476,6 +497,7 @@ private fun Hero(
     state: PlayerUiState,
     compact: Boolean = false,
     onToggleFavorite: () -> Unit,
+    onTag: () -> Unit,
     onClick: () -> Unit,
 ) {
     // An empty vault has no position to report, and saying so twice — here and on the greyed-out
@@ -529,6 +551,19 @@ private fun Hero(
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 3.sp,
                 )
+                Spacer(Modifier.width(6.dp))
+                // The third target inside the readout, and the same bargain the heart makes: a
+                // press here files the track, a press anywhere else still asks which track to go
+                // to. Filing is the one thing the dock could do to a track that the player could
+                // not, and it is most wanted exactly where the track is playing.
+                GlyphButton(
+                    glyph = TagGlyph,
+                    contentDescription = "Choose groups for this track",
+                    onClick = onTag,
+                    size = 30.dp,
+                    glyphFraction = 0.34f,
+                    tint = MUTED,
+                )
             }
             Spacer(Modifier.height(if (compact) 6.dp else 10.dp))
             Text(
@@ -541,6 +576,44 @@ private fun Hero(
             )
         }
     }
+}
+
+/**
+ * The tag sheet, for the one track the player knows about.
+ *
+ * Which groups a track is already in is a question for the database, and it is asked here rather
+ * than kept in the state for the same reason the dock asks it: the answer is only wanted while the
+ * sheet is open, and it must be fresh when it opens. Keying the effect on the track means opening
+ * the sheet, and a track changing underneath an open sheet, both ask again.
+ */
+@Composable
+private fun TagDialogFor(
+    state: PlayerUiState,
+    showing: Boolean,
+    onReadSharedGroups: (List<Track>) -> Unit,
+    onSetTag: (List<Track>, String, Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val track = state.currentTrack
+    LaunchedEffect(showing, track?.id) {
+        if (showing && track != null) onReadSharedGroups(listOf(track))
+    }
+    if (!showing) return
+    // Nothing playing is nothing to file. The button cannot be reached in that state anyway --
+    // the readout it sits in is not drawn on an empty vault -- but a queue can empty underneath an
+    // open sheet.
+    if (track == null) {
+        // From an effect rather than straight from composition: closing it here would be a state
+        // write while the tree is being built, which Compose is entitled to punish.
+        LaunchedEffect(Unit) { onDismiss() }
+        return
+    }
+    TagDialog(
+        state = state,
+        tracks = listOf(track),
+        onSetTag = { groupId, tagged -> onSetTag(listOf(track), groupId, tagged) },
+        onDismiss = onDismiss,
+    )
 }
 
 /**

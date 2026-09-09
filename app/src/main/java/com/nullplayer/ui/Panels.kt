@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -23,6 +25,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +40,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
+import com.nullplayer.data.Track
+import com.nullplayer.playback.PlayerUiState
 import kotlin.math.pow
 
 /**
@@ -298,5 +307,83 @@ internal fun Glyph(
         contentDescription = contentDescription,
         tint = tint,
         modifier = Modifier.size(size),
+    )
+}
+
+/**
+ * Filing a selection into groups.
+ *
+ * It is reached from two places that have nothing else in common: the dock, filing a whole
+ * selection at once, and the player, filing the one track that happens to be playing. The dock
+ * is why it is written for a list rather than for a track.
+ *
+ * A group is ticked when every selected track is already in it, so a tap reads as "put all of
+ * these here" or "take all of these out" rather than as a per-track toggle, which would need a
+ * third state to be honest about a mixed selection.
+ */
+@Composable
+internal fun TagDialog(
+    state: PlayerUiState,
+    tracks: List<Track>,
+    onSetTag: (String, Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = PANEL,
+        titleContentColor = TEXT,
+        textContentColor = MUTED,
+        title = {
+            Text(if (tracks.size == 1) "Tag this track" else "Tag " + tracks.size + " tracks")
+        },
+        text = {
+            if (state.groups.isEmpty()) {
+                Text(
+                    text = "There are no groups yet. Make one in the library first.",
+                    color = MUTED,
+                    fontSize = 13.sp,
+                )
+            } else {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    state.groups.forEach { group ->
+                        val tagged = group.id in state.sharedGroupIds
+                        val groupColour = Color(group.colorArgb)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onSetTag(group.id, !tagged) }
+                                .padding(vertical = 10.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.size(12.dp).clip(CircleShape).background(groupColour))
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                text = group.name,
+                                color = TEXT,
+                                fontSize = 15.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            // The row owns the click, so the box itself is not separately
+                            // focusable — a tap anywhere on the line picks the group.
+                            Checkbox(
+                                checked = tagged,
+                                onCheckedChange = null,
+                                colors = CheckboxDefaults.colors(
+                                    checkedColor = groupColour,
+                                    checkmarkColor = readableOn(groupColour),
+                                    uncheckedColor = LINE,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done", color = ACCENT) }
+        },
     )
 }
