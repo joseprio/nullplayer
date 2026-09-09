@@ -42,6 +42,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -97,10 +100,21 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
 import kotlin.math.sin
 
-private const val SCRUB_STEP_MS = 5_000L
+/** How far a held skip button moves. Shared with the mini player, whose buttons are the same. */
+internal const val SCRUB_STEP_MS = 5_000L
 
 /** How long the centred tile must hold still before the queue actually moves to it. */
 private const val SELECT_COMMIT_MS = 90L
+
+/**
+ * How much of its button a skip mark takes, against the play triangle's 0.26.
+ *
+ * A skip runs the full width it is given where the triangle stops well short of its own, so the
+ * two need different fractions to read as the same size. The transport is the one row where that
+ * mismatch is obvious: three marks side by side, and the outer pair is what the eye measures the
+ * middle one against.
+ */
+private const val SKIP_GLYPH = 0.25f
 
 /** The screen's own margin. Named because the button row has to measure against it. */
 private val SCREEN_PADDING = 20.dp
@@ -154,6 +168,7 @@ fun PlayerScreen(
     onScrub: (Long) -> Unit,
     onSeek: (Float) -> Unit,
     onToggleTimeMode: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onGoToTrack: (Int) -> Unit,
     onVoiceOver: () -> Unit,
     onVoiceOverLong: () -> Unit,
@@ -213,6 +228,8 @@ fun PlayerScreen(
                     VaultRibbon(
                         groups = state.groups,
                         vaultCount = state.vaultCount,
+                        favoriteCount = state.favoriteCount,
+                        showFavorites = state.hasFavorites,
                         activeId = state.activeGroupId,
                         showCounts = state.settings.showVaultCounts,
                         onSelect = onSelectVault,
@@ -227,7 +244,7 @@ fun PlayerScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         if (state.hasTracks) {
-                            Hero(state, compact = true) { goingToTrack = true }
+                            Hero(state, compact = true, onToggleFavorite = onToggleFavorite) { goingToTrack = true }
                             Spacer(Modifier.height(12.dp))
                         }
                         Controls(
@@ -247,6 +264,8 @@ fun PlayerScreen(
                 VaultRibbon(
                     groups = state.groups,
                     vaultCount = state.vaultCount,
+                    favoriteCount = state.favoriteCount,
+                    showFavorites = state.hasFavorites,
                     activeId = state.activeGroupId,
                     showCounts = state.settings.showVaultCounts,
                     onSelect = onSelectVault,
@@ -255,7 +274,7 @@ fun PlayerScreen(
 
                 Spacer(Modifier.weight(1f))
                 if (state.hasTracks) {
-                    Hero(state) { goingToTrack = true }
+                    Hero(state, onToggleFavorite = onToggleFavorite) { goingToTrack = true }
                     Spacer(Modifier.height(30.dp))
                 }
                 Controls(
@@ -453,7 +472,12 @@ private fun TopBar(
  * than the controls under it — so this is what gives way first.
  */
 @Composable
-private fun Hero(state: PlayerUiState, compact: Boolean = false, onClick: () -> Unit) {
+private fun Hero(
+    state: PlayerUiState,
+    compact: Boolean = false,
+    onToggleFavorite: () -> Unit,
+    onClick: () -> Unit,
+) {
     // An empty vault has no position to report, and saying so twice — here and on the greyed-out
     // transport below — is one line of chrome more than it is worth.
     if (!state.hasTracks) return
@@ -469,16 +493,46 @@ private fun Hero(state: PlayerUiState, compact: Boolean = false, onClick: () -> 
                 .clickable(onClickLabel = "Go to a track", onClick = onClick)
                 .padding(horizontal = 28.dp, vertical = 6.dp),
         ) {
-            Text(
-                text = "TRACK",
-                color = MUTED,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 3.sp,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // Its own target inside the readout's: a press on the heart marks the track, a
+                // press anywhere else on the readout still asks which track to go to.
+                Box(
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .clickable(
+                            onClickLabel = if (state.currentIsFavorite) {
+                                "Remove from favorites"
+                            } else {
+                                "Add to favorites"
+                            },
+                            onClick = onToggleFavorite,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Glyph(
+                        if (state.currentIsFavorite) {
+                            Icons.Filled.Favorite
+                        } else {
+                            Icons.Filled.FavoriteBorder
+                        },
+                        if (state.currentIsFavorite) ACCENT else MUTED,
+                        contentDescription = null,
+                        size = 20.dp,
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "TRACK",
+                    color = MUTED,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 3.sp,
+                )
+            }
             Spacer(Modifier.height(if (compact) 6.dp else 10.dp))
             Text(
-                text = position(state),
+                text = queuePosition(state),
                 color = TEXT,
                 fontSize = if (compact) 34.sp else 46.sp,
                 fontWeight = FontWeight.Light,
@@ -573,9 +627,19 @@ private fun GoToTrackDialog(
     )
 }
 
-private fun position(state: PlayerUiState): String = when {
-    state.trackIndex < 0 -> "-- / ${state.tracks.size}"
-    else -> "${state.trackIndex + 1} / ${state.tracks.size}"
+/**
+ * Where in the queue we are, as the player's hero readout and the mini player both say it.
+ *
+ * A queue with nothing chosen yet still knows how much it holds, so the total is stated and only
+ * the position is withheld.
+ *
+ * [separator] is the one thing the two callers disagree on. Set in 46pt as the only number on the
+ * player, the slash wants air around it or the three glyphs read as one; in the strip at 12pt it
+ * is a label rather than a display, and the same air there just pulls the figure apart.
+ */
+internal fun queuePosition(state: PlayerUiState, separator: String = " / "): String {
+    val here = if (state.trackIndex < 0) "--" else "${state.trackIndex + 1}"
+    return "$here$separator${state.tracks.size}"
 }
 
 // -- Controls -----------------------------------------------------------------------------------
@@ -640,6 +704,8 @@ private data class Tile(
 private fun VaultRibbon(
     groups: List<GroupSummary>,
     vaultCount: Int,
+    favoriteCount: Int,
+    showFavorites: Boolean,
     activeId: String,
     showCounts: Boolean,
     onSelect: (String) -> Unit,
@@ -647,9 +713,22 @@ private fun VaultRibbon(
     modifier: Modifier = Modifier,
     upright: Boolean = false,
 ) {
-    val tiles = remember(groups, vaultCount) {
+    // Favorites sits second, between the vault and the groups: it is the other tile that is not a
+    // group, and pinning it there keeps the pair of them in the same place however the groups come
+    // and go.
+    val tiles = remember(groups, vaultCount, favoriteCount, showFavorites) {
         buildList {
             add(Tile(Group.VAULT_ID, Group.VAULT_NAME, Group.VAULT_COLOR, vaultCount))
+            if (showFavorites) {
+                add(
+                    Tile(
+                        Group.FAVORITES_ID,
+                        Group.FAVORITES_NAME,
+                        Group.FAVORITES_COLOR,
+                        favoriteCount,
+                    )
+                )
+            }
             groups.forEach { add(Tile(it.id, it.name, it.colorArgb, it.itemCount)) }
         }
     }
@@ -833,37 +912,7 @@ private fun Progress(
     var dragFraction by remember { mutableFloatStateOf(-1f) }
     val seekable = state.durationMs > 0
     val shown = if (dragFraction >= 0f) dragFraction else state.progress
-
-    // A track whose length is still unknown is one the player has not finished opening: there is
-    // no position to draw and no duration to draw it against, which is the "--:--" the user sees.
-    val waiting = state.isBuffering && !seekable
-
-    /**
-     * Held back a moment before it appears.
-     *
-     * Every track change passes through buffering for a few dozen milliseconds. Reacting to that
-     * instantly would put a flash of animation between every song — the same blink the play button
-     * used to have — so the bar only admits to waiting once the wait is long enough to be worth
-     * mentioning. Going back to normal is immediate: an answer that has arrived should not be held.
-     */
-    var busy by remember { mutableStateOf(false) }
-    LaunchedEffect(waiting) {
-        if (!waiting) {
-            busy = false
-        } else {
-            delay(BUSY_AFTER_MS)
-            busy = true
-        }
-    }
-
-    val sweep by rememberInfiniteTransition(label = "loading").animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1100, easing = FastOutSlowInEasing),
-        ),
-        label = "sweep",
-    )
+    val busy = rememberBusy(state)
 
     Column(Modifier.fillMaxWidth()) {
         Box(
@@ -893,51 +942,16 @@ private fun Progress(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Canvas(Modifier.fillMaxWidth().height(28.dp)) {
-                val trackHeight = 4.dp.toPx()
-                val y = size.height / 2f
-                drawLine(
-                    color = LINE,
-                    start = Offset(0f, y),
-                    end = Offset(size.width, y),
-                    strokeWidth = trackHeight,
-                    cap = StrokeCap.Round,
-                )
-                if (busy) {
-                    // A short piece of the bar crossing it and leaving, over and over. It says the
-                    // same thing a filled bar says — something is happening — without claiming to
-                    // know how far along it is, which is the one thing nobody knows yet.
-                    val head = sweep * (1f + BUSY_SPAN)
-                    val from = ((head - BUSY_SPAN) * size.width).coerceIn(0f, size.width)
-                    val to = (head * size.width).coerceIn(0f, size.width)
-                    if (to > from) {
-                        drawLine(
-                            color = ACCENT,
-                            start = Offset(from, y),
-                            end = Offset(to, y),
-                            strokeWidth = trackHeight,
-                            cap = StrokeCap.Round,
-                        )
-                    }
-                } else {
-                    if (shown > 0f) {
-                        drawLine(
-                            color = ACCENT,
-                            start = Offset(0f, y),
-                            end = Offset(size.width * shown, y),
-                            strokeWidth = trackHeight,
-                            cap = StrokeCap.Round,
-                        )
-                    }
-                    if (seekable) {
-                        drawCircle(
-                            color = ACCENT,
-                            radius = if (dragFraction >= 0f) 9.dp.toPx() else 6.dp.toPx(),
-                            center = Offset(size.width * shown, y),
-                        )
-                    }
-                }
-            }
+            ProgressBar(
+                fraction = shown,
+                busy = busy,
+                modifier = Modifier.fillMaxWidth().height(28.dp),
+                thumbRadius = when {
+                    !seekable -> 0.dp
+                    dragFraction >= 0f -> 9.dp
+                    else -> 6.dp
+                },
+            )
         }
 
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -976,6 +990,109 @@ private const val BUSY_AFTER_MS = 350L
 private const val BUSY_SPAN = 0.3f
 
 /**
+ * Whether the bar should stop claiming to know how far along the track is.
+ *
+ * A track whose length is still unknown is one the player has not finished opening: there is no
+ * position to draw and no duration to draw it against, which is the "--:--" the seeker shows.
+ *
+ * The answer is held back a moment before it turns true. Every track change passes through
+ * buffering for a few dozen milliseconds, and reacting to that instantly would put a flash of
+ * animation between every song — the same blink the play button used to have. Going back to
+ * normal is immediate: an answer that has arrived should not be held.
+ */
+@Composable
+internal fun rememberBusy(state: PlayerUiState): Boolean {
+    val waiting = state.isBuffering && state.durationMs <= 0
+
+    var busy by remember { mutableStateOf(false) }
+    LaunchedEffect(waiting) {
+        if (!waiting) {
+            busy = false
+        } else {
+            delay(BUSY_AFTER_MS)
+            busy = true
+        }
+    }
+    return busy
+}
+
+/**
+ * The bar itself, drawn the same way wherever it appears: the player's seeker and the hairline
+ * over the mini player are one bar at two sizes, so a track that is still opening looks like it is
+ * still opening on both.
+ *
+ * [thumbRadius] of zero leaves the handle off, which is what a bar that cannot be dragged wants.
+ * The travelling segment replaces the fill rather than joining it — while [busy] there is no
+ * position to show, and drawing one anyway would be inventing it.
+ */
+@Composable
+internal fun ProgressBar(
+    fraction: Float,
+    busy: Boolean,
+    modifier: Modifier = Modifier,
+    thickness: Dp = 4.dp,
+    thumbRadius: Dp = 0.dp,
+    cap: StrokeCap = StrokeCap.Round,
+) {
+    val sweep by rememberInfiniteTransition(label = "loading").animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1100, easing = FastOutSlowInEasing),
+        ),
+        label = "sweep",
+    )
+
+    Canvas(modifier) {
+        val stroke = thickness.toPx()
+        val y = size.height / 2f
+        drawLine(
+            color = LINE,
+            start = Offset(0f, y),
+            end = Offset(size.width, y),
+            strokeWidth = stroke,
+            cap = cap,
+        )
+
+        if (busy) {
+            // A short piece of the bar crossing it and leaving, over and over. It says the same
+            // thing a filled bar says — something is happening — without claiming to know how far
+            // along it is, which is the one thing nobody knows yet.
+            val head = sweep * (1f + BUSY_SPAN)
+            val from = ((head - BUSY_SPAN) * size.width).coerceIn(0f, size.width)
+            val to = (head * size.width).coerceIn(0f, size.width)
+            if (to > from) {
+                drawLine(
+                    color = ACCENT,
+                    start = Offset(from, y),
+                    end = Offset(to, y),
+                    strokeWidth = stroke,
+                    cap = cap,
+                )
+            }
+            return@Canvas
+        }
+
+        if (fraction > 0f) {
+            drawLine(
+                color = ACCENT,
+                start = Offset(0f, y),
+                end = Offset(size.width * fraction, y),
+                strokeWidth = stroke,
+                cap = cap,
+            )
+        }
+        if (thumbRadius > 0.dp) {
+            drawCircle(
+                color = ACCENT,
+                radius = thumbRadius.toPx(),
+                center = Offset(size.width * fraction, y),
+            )
+        }
+    }
+}
+
+/**
  * The right-hand label: how much of the track is left, or how long the whole thing is.
  *
  * Both are the same number seen from opposite ends, and which one is wanted depends entirely on
@@ -1011,7 +1128,7 @@ private fun Transport(
             onLongPress = { onScrub(-SCRUB_STEP_MS) },
             enabled = state.hasTracks,
             size = if (compact) 48.dp else 56.dp,
-            glyphFraction = 0.30f,
+            glyphFraction = SKIP_GLYPH,
         )
         // Greyed when play would be refused, but never disabled: the press is what produces the
         // line explaining what to fix. Nothing to play and no headset where one is required look
@@ -1034,7 +1151,7 @@ private fun Transport(
             onLongPress = { onScrub(SCRUB_STEP_MS) },
             enabled = state.hasTracks,
             size = if (compact) 48.dp else 56.dp,
-            glyphFraction = 0.30f,
+            glyphFraction = SKIP_GLYPH,
         )
     }
 }

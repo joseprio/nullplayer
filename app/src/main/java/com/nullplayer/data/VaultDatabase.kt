@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [Track::class, Group::class, TrackGroup::class],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class VaultDatabase : RoomDatabase() {
@@ -145,6 +145,20 @@ abstract class VaultDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Version 5 gives every track a heart.
+         *
+         * Defaulted to 0, which is what an existing vault should read as: nothing has been marked
+         * yet, and the Favorites tile stays out of the ribbon until two tracks have been.
+         */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE tracks ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         fun get(context: Context): VaultDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -153,7 +167,7 @@ abstract class VaultDatabase : RoomDatabase() {
                     // Lives under /data/data/<pkg>/databases, which no other app can read.
                     "vault.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { instance = it }
             }

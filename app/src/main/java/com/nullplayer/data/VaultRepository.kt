@@ -75,12 +75,30 @@ class VaultRepository(private val context: Context) {
 
     // -- Tracks -------------------------------------------------------------------------------
 
-    /** Pass a blank group for the whole vault. */
-    fun observeTracks(groupId: String): Flow<List<Track>> =
-        if (groupId.isEmpty()) dao.observeAll() else dao.observeInGroup(groupId)
+    /**
+     * Pass a blank group for the whole vault, or [Group.FAVORITES_ID] for everything hearted.
+     *
+     * The two standing tiles are answered here rather than by tagging their tracks into real
+     * groups, which is what lets them exist without a row anyone could rename or delete.
+     */
+    fun observeTracks(groupId: String): Flow<List<Track>> = when (groupId) {
+        Group.VAULT_ID -> dao.observeAll()
+        Group.FAVORITES_ID -> dao.observeFavorites()
+        else -> dao.observeInGroup(groupId)
+    }
 
-    suspend fun tracks(groupId: String): List<Track> =
-        if (groupId.isEmpty()) dao.all() else dao.inGroup(groupId)
+    suspend fun tracks(groupId: String): List<Track> = when (groupId) {
+        Group.VAULT_ID -> dao.all()
+        Group.FAVORITES_ID -> dao.favorites()
+        else -> dao.inGroup(groupId)
+    }
+
+    /** How many tracks are hearted. The Favorites tile stands or falls on this alone. */
+    fun observeFavoriteCount(): Flow<Int> = dao.observeFavoriteCount()
+
+    suspend fun setFavorite(id: String, favorite: Boolean) = withContext(Dispatchers.IO) {
+        dao.setFavorite(id, favorite)
+    }
 
     suspend fun track(id: String): Track? = dao.byId(id)
 

@@ -97,11 +97,13 @@ internal fun Panel(
  * The title bar every sub-screen carries: a back arrow, then the name.
  *
  * The arrow leads rather than a "Done" trailing the title, which is where Android users reach for
- * it and what the system back gesture mirrors.
+ * it and what the system back gesture mirrors. The bar sits above the scrolling content rather
+ * than at the top of it, so the way back out is never scrolled off a long list; it carries its own
+ * insets because it is the one thing on these screens that is not part of the list.
  */
 @Composable
-internal fun ScreenHeader(title: String, onBack: () -> Unit) {
-    ScreenHeader(onBack) {
+internal fun ScreenHeader(title: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
+    ScreenHeader(onBack, modifier) {
         Text(
             text = title,
             color = TEXT,
@@ -114,9 +116,17 @@ internal fun ScreenHeader(title: String, onBack: () -> Unit) {
 
 /** The same bar, for a title that is more than a word — a vault's colour and name, say. */
 @Composable
-internal fun ScreenHeader(onBack: () -> Unit, content: @Composable RowScope.() -> Unit) {
+internal fun ScreenHeader(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        // The fill arrives in [modifier]: the bar floats over the list rather than sitting above
+        // it, so what paints its background is frosted glass rather than a flat colour.
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 20.dp, top = 44.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(

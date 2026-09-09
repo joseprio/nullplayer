@@ -1,6 +1,7 @@
 package com.nullplayer
 
 import android.app.Application
+import com.nullplayer.data.VaultCrypto
 import com.nullplayer.playback.PlaybackGate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,9 @@ class NullPlayerApp : Application() {
     override fun onCreate() {
         super.onCreate()
         clearUploadScratch()
+        // Before anything can ask for a track: the player, the web server and the import path all
+        // decrypt, and any of the three can be the first thing awake in the process.
+        VaultCrypto.bind(this)
         // Bound here rather than in the service or the ViewModel so the playback rules are already
         // in force whichever of the two wakes up first.
         PlaybackGate.bind(this, scope)

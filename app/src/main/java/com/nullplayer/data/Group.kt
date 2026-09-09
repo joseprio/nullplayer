@@ -48,6 +48,21 @@ data class Group(
         const val VAULT_ID = ""
         const val VAULT_NAME = "Vault"
         val VAULT_COLOR = 0xFFD4D6DB.toInt()
+
+        /**
+         * Everything marked a favourite, which is not a group either and has no row.
+         *
+         * It behaves like one everywhere it is asked to — the ribbon selects it, the queue plays
+         * it, the dock browses it — but it is never offered among the groups, because there is
+         * nothing about it to edit: no name, no colour, and no membership except the heart on each
+         * track. The id is deliberately not a UUID, so it can never collide with a real group's.
+         */
+        const val FAVORITES_ID = "~favorites"
+        const val FAVORITES_NAME = "Favorites"
+        val FAVORITES_COLOR = 0xFFCC4444.toInt()
+
+        /** Neither of the two standing tiles is a group, so neither can be edited or deleted. */
+        fun isSynthetic(id: String): Boolean = id == VAULT_ID || id == FAVORITES_ID
     }
 }
 

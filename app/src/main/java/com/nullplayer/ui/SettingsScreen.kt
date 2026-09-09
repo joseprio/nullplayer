@@ -53,6 +53,7 @@ private const val SYSTEM_DEFAULT = ""
 @Composable
 fun SettingsScreen(
     state: PlayerUiState,
+    onBlockScreenshots: (Boolean) -> Unit,
     onLockOnLaunch: (Boolean) -> Unit,
     onLockOnPlay: (Boolean) -> Unit,
     onLockOnDock: (Boolean) -> Unit,
@@ -63,21 +64,24 @@ fun SettingsScreen(
     onRequiredDevice: (String) -> Unit,
     onPreferredDevice: (String) -> Unit,
     onClose: () -> Unit,
+    miniPlayer: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val settings = state.settings
     var choosingVoice by remember { mutableStateOf(false) }
 
-    Box(modifier.fillMaxSize().background(BACKGROUND)) {
+    GlassScaffold(
+        topBar = { glass ->
+            ScreenHeader(title = "settings", onBack = onClose, modifier = glass)
+        },
+        bottomBar = miniPlayer,
+        modifier = modifier,
+    ) { top, inset ->
         LazyColumn(
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 44.dp, bottom = 60.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = top, bottom = 20.dp + inset),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item {
-                ScreenHeader(title = "settings", onBack = onClose)
-                Spacer(Modifier.height(22.dp))
-            }
-
             // -- Security ---------------------------------------------------------------------
 
             item { SectionHeader("Security") }
@@ -96,6 +100,21 @@ fun SettingsScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // Above the biometric switches, and not greyed out with them: this is the one lock
+            // here that asks nothing of the phone's hardware, so it is the one still available
+            // on a device with no enrolment.
+            item {
+                Panel {
+                    ToggleRow(
+                        title = "Block screenshots",
+                        subtitle = "Refuse screen capture and recording, and blank the app in " +
+                            "the recent-apps list.",
+                        checked = settings.blockScreenshots,
+                        onCheckedChange = onBlockScreenshots,
+                    )
                 }
             }
 
@@ -262,7 +281,6 @@ fun SettingsScreen(
                     )
                 }
             }
-
         }
     }
 

@@ -24,7 +24,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -63,20 +62,23 @@ fun LibraryScreen(
     onUpdateGroup: (String, String, Int) -> Unit,
     onDeleteGroup: (String) -> Unit,
     onClose: () -> Unit,
+    miniPlayer: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var editingGroup by remember { mutableStateOf<GroupSummary?>(null) }
 
-    Box(modifier.fillMaxSize().background(BACKGROUND)) {
+    GlassScaffold(
+        topBar = { glass ->
+            ScreenHeader(title = "library", onBack = onClose, modifier = glass)
+        },
+        bottomBar = miniPlayer,
+        modifier = modifier,
+    ) { top, inset ->
         LazyColumn(
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 44.dp, bottom = 60.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = top, bottom = 20.dp + inset),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item {
-                ScreenHeader(title = "library", onBack = onClose)
-                Spacer(Modifier.height(22.dp))
-            }
-
             // The vault itself: everything, and the one row that is not a tag.
             item {
                 LibraryRow(
@@ -151,8 +153,9 @@ fun LibraryScreen(
 /**
  * One row of the library: the vault, or a group.
  *
- * The vault gets no pencil — it has no name or colour to change and cannot be deleted — so that
- * slot carries a manage mark that opens it instead.
+ * The vault gets no pencil — it has no name or colour to change and cannot be deleted — and no
+ * mark in its place either: the row itself opens it, and a button repeating that is one the user
+ * has to press once to learn it does nothing new.
  */
 @Composable
 private fun LibraryRow(
@@ -189,25 +192,19 @@ private fun LibraryRow(
             PlayingMark(colour)
             Spacer(Modifier.width(4.dp))
         }
-        Box(
-            modifier = Modifier
-                .size(34.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { if (onEdit != null) onEdit() else onOpen() },
-            contentAlignment = Alignment.Center,
-        ) {
-            // The slot means "manage what this row is". For a group that is renaming and
-            // recolouring it; the vault has neither, so it means opening the one screen where the
-            // library itself is managed.
-            if (onEdit != null) {
+        // The slot means "manage what this row is", which for a group is renaming and recolouring
+        // it. The vault is neither named nor coloured by anyone, so it has no slot: what stood
+        // here opened the vault's own list, which is what tapping the row does, under an icon
+        // promising something else.
+        if (onEdit != null) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onEdit() },
+                contentAlignment = Alignment.Center,
+            ) {
                 Glyph(Icons.Filled.Edit, MUTED, contentDescription = "Edit this group", size = 18.dp)
-            } else {
-                Glyph(
-                    Icons.Filled.Settings,
-                    MUTED,
-                    contentDescription = "Manage the vault",
-                    size = 18.dp,
-                )
             }
         }
         Glyph(Icons.AutoMirrored.Filled.KeyboardArrowRight, MUTED, contentDescription = null)

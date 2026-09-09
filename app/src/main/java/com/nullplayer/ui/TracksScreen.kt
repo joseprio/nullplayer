@@ -26,6 +26,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
@@ -53,6 +55,15 @@ import com.nullplayer.playback.PlayerUiState
 private val AUDIO_TYPES = arrayOf("audio/*", "application/ogg", "application/x-flac")
 
 /**
+ * "1 track" / "4 tracks".
+ *
+ * The bar's two selection marks carry no label, so the count they act on lives in what a screen
+ * reader says instead — a bare "Delete" would be the one button here worth being sure about.
+ */
+private fun countedTracks(count: Int): String =
+    if (count == 1) "1 track" else "$count tracks"
+
+/**
  * One vault's contents: the only screen in the app that names anything.
  *
  * The rest stays anonymous — the player, the notification, a car head unit — but a library you
@@ -69,10 +80,12 @@ fun TracksScreen(
     state: PlayerUiState,
     onImport: (List<android.net.Uri>) -> Unit,
     onPlay: (Track) -> Unit,
+    onSetFavorite: (Track, Boolean) -> Unit,
     onDelete: (List<Track>) -> Unit,
     onReadSharedGroups: (List<Track>) -> Unit,
     onSetTag: (List<Track>, String, Boolean) -> Unit,
     onClose: () -> Unit,
+    miniPlayer: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tracks = state.browseTracks
@@ -94,58 +107,94 @@ fun TracksScreen(
 
     val colour = Color(state.browseColor)
 
-    Box(modifier.fillMaxSize().background(BACKGROUND)) {
+    GlassScaffold(
+        topBar = { glass ->
+            // With a selection standing, the arrow drops it rather than leaving the screen, so a
+            // mis-tap on a long list costs one tap instead of the whole way back in. The system back
+            // gesture still leaves outright.
+            ScreenHeader(
+                onBack = { if (selected.isNotEmpty()) leaveSelection() else onClose() },
+                modifier = glass,
+            ) {
+                if (selected.isNotEmpty()) {
+                    Text(
+                        text = "${selected.size} selected",
+                        color = TEXT,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 2.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Box(Modifier.size(12.dp).clip(CircleShape).background(colour))
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        text = state.browseName,
+                        color = TEXT,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+
+                // What the bar offers follows what is selected. With a selection standing the two
+                // things worth doing to it are filing it and dropping it, and importing is not one
+                // of them; with nothing selected there is nothing to file or drop, and importing is
+                // the only thing left.
+                if (selected.isNotEmpty()) {
+                    GlyphButton(
+                        glyph = TagGlyph,
+                        contentDescription = "Tag " + countedTracks(selected.size),
+                        onClick = {
+                            onReadSharedGroups(selected)
+                            tagging = true
+                        },
+                        size = 34.dp,
+                        glyphFraction = 0.30f,
+                        tint = TEXT,
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { pendingDelete = selected },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        // The one mark on this screen that means something is about to be lost, so
+                        // it is the one that is coloured for it — and the same trash the rows carry,
+                        // because it does the same thing to more of them.
+                        Glyph(
+                            Icons.Filled.Delete,
+                            DANGER,
+                            contentDescription = "Delete " + countedTracks(selected.size),
+                            size = 20.dp,
+                        )
+                    }
+                } else if (state.browseGroupId == Group.VAULT_ID) {
+                    // Importing belongs to the vault alone. A group is a tag over the vault, not a
+                    // place to put a file, so a track arrives in the vault and is tagged into a
+                    // group afterwards.
+                    GlyphButton(
+                        glyph = ImportGlyph,
+                        contentDescription = "Add music from this device",
+                        onClick = { picker.launch(AUDIO_TYPES) },
+                        size = 34.dp,
+                        glyphFraction = 0.30f,
+                        tint = TEXT,
+                    )
+                }
+            }
+        },
+        bottomBar = miniPlayer,
+        modifier = modifier,
+    ) { top, inset ->
         LazyColumn(
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 44.dp, bottom = 60.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = top, bottom = 20.dp + inset),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item {
-                // With a selection standing, the arrow drops it rather than leaving the screen, so
-                // a mis-tap on a long list costs one tap instead of the whole way back in. The
-                // system back gesture still leaves outright.
-                ScreenHeader(
-                    onBack = { if (selected.isNotEmpty()) leaveSelection() else onClose() }
-                ) {
-                    if (selected.isNotEmpty()) {
-                        Text(
-                            text = "${selected.size} selected",
-                            color = TEXT,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            letterSpacing = 2.sp,
-                            modifier = Modifier.weight(1f),
-                        )
-                    } else {
-                        Box(Modifier.size(12.dp).clip(CircleShape).background(colour))
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = state.browseName,
-                            color = TEXT,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-
-                    // Importing belongs to the vault alone. A group is a tag over the vault, not
-                    // a place to put a file, so a track arrives in the vault and is tagged into a
-                    // group afterwards.
-                    if (state.browseGroupId == Group.VAULT_ID) {
-                        GlyphButton(
-                            glyph = ImportGlyph,
-                            contentDescription = "Add music from this device",
-                            onClick = { picker.launch(AUDIO_TYPES) },
-                            size = 34.dp,
-                            glyphFraction = 0.30f,
-                            tint = TEXT,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(22.dp))
-            }
-
             if (state.isImporting) {
                 item {
                     Column {
@@ -206,37 +255,9 @@ fun TracksScreen(
                             selection + track.id
                         }
                     },
+                    onToggleFavorite = { onSetFavorite(track, !track.favorite) },
                     onDelete = { pendingDelete = listOf(track) },
                 )
-            }
-
-            if (tracks.isNotEmpty()) {
-                item {
-                    Spacer(Modifier.height(14.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        SelectionAction(
-                            label = if (selected.isEmpty()) "Tag" else "Tag " + selected.size,
-                            colour = ACCENT,
-                            enabled = selected.isNotEmpty(),
-                            modifier = Modifier.weight(1f),
-                            onClick = {
-                                onReadSharedGroups(selected)
-                                tagging = true
-                            },
-                        )
-                        SelectionAction(
-                            label = if (selected.isEmpty()) {
-                                "Nothing selected"
-                            } else {
-                                "Delete " + selected.size
-                            },
-                            colour = DANGER,
-                            enabled = selected.isNotEmpty(),
-                            modifier = Modifier.weight(1f),
-                            onClick = { pendingDelete = selected },
-                        )
-                    }
-                }
             }
         }
     }
@@ -277,32 +298,6 @@ fun TracksScreen(
                     Text("Cancel", color = MUTED)
                 }
             },
-        )
-    }
-}
-
-@Composable
-private fun SelectionAction(
-    label: String,
-    colour: Color,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (enabled) colour.copy(alpha = 0.14f) else Color.Transparent)
-            .border(1.dp, if (enabled) colour else LINE, RoundedCornerShape(10.dp))
-            .then(if (enabled) Modifier.clickable { onClick() } else Modifier)
-            .padding(vertical = 13.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = label,
-            color = if (enabled) colour else MUTED,
-            fontSize = 14.sp,
-            maxLines = 1,
         )
     }
 }
@@ -400,6 +395,7 @@ private fun TrackRow(
     selected: Boolean,
     onPlay: () -> Unit,
     onToggle: () -> Unit,
+    onToggleFavorite: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Row(
@@ -444,6 +440,27 @@ private fun TrackRow(
         }
 
         Spacer(Modifier.width(6.dp))
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { onToggleFavorite() },
+            contentAlignment = Alignment.Center,
+        ) {
+            // Plain white when it is set, rather than the tile's colour or the Favorites red: this
+            // row is read down a list where every other mark is either the accent or muted, and a
+            // third colour on it would say something the heart does not mean.
+            Glyph(
+                if (track.favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                if (track.favorite) TEXT else MUTED,
+                contentDescription = if (track.favorite) {
+                    "Remove from favorites"
+                } else {
+                    "Add to favorites"
+                },
+                size = 19.dp,
+            )
+        }
         Box(
             modifier = Modifier
                 .size(34.dp)

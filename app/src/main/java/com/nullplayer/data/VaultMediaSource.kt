@@ -25,10 +25,10 @@ internal class VaultMediaSource(file: File) : MediaDataSource() {
     /**
      * The cipher the last read finished with, and the offset it stopped at.
      *
-     * Deriving a positioned cipher means going back to the Android Keystore for the key, which is
-     * far from free, and a reader walking forward through a header would otherwise pay that on
-     * every buffer. A read that carries on where the last one stopped can keep the cipher it
-     * already has: CTR has advanced the counter to exactly the right place by itself.
+     * A read that carries on where the last one stopped keeps the cipher it already has, since CTR
+     * has advanced the counter to exactly the right place by itself. That saves a key schedule and
+     * an allocation per buffer rather than anything dramatic — but a tag reader walking forward
+     * through a header is nearly all such reads, so it is close to free to keep.
      */
     private var cipher: Cipher? = null
     private var cipherAt = -1L

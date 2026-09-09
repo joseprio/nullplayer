@@ -25,6 +25,12 @@ data class AppSettings(
     val deleteOriginals: Boolean = false,
     /** Ask for biometrics before the app is usable at all. */
     val lockOnLaunch: Boolean = false,
+    /**
+     * Refuse screenshots, screen recordings and casting, and blank the entry in the recent-apps
+     * list. Off by default: it is the one setting here that takes something away from the user
+     * as readily as from anyone looking over their shoulder.
+     */
+    val blockScreenshots: Boolean = false,
     /** Ask for biometrics every time playback starts or resumes. */
     val lockOnPlay: Boolean = false,
     /**
@@ -50,10 +56,10 @@ data class AppSettings(
     /**
      * Play every track at the same loudness.
      *
-     * Independent of [equalizerEnabled] despite living on the same screen: it needs no curve, and
-     * someone who wants their library levelled but not coloured should not have to switch the
-     * equalizer on to get it. It is also what gates the measuring sweep, so nothing is decoded in
-     * the background for a feature that is switched off.
+     * Stored on its own but only honoured while [equalizerEnabled] is on — see
+     * [normalizingVolume]. The switch on the title bar governs everything the app does to the
+     * sound on its way out, levelling included, so there is one way to hear a file untouched
+     * rather than two things to remember to turn off.
      */
     val normalizeVolume: Boolean = false,
     /** Which tile the ribbon has selected. Blank is the whole vault. */
@@ -70,7 +76,16 @@ data class AppSettings(
     val voiceName: String = "",
     /** Whether the notification permission has been asked for once. It is never asked twice. */
     val askedForNotifications: Boolean = false,
-)
+) {
+    /**
+     * Whether levelling is actually running, as opposed to merely asked for.
+     *
+     * The one place the two switches are combined: the audio chain, the measuring sweep and the
+     * screen all read this, so a track's gain, whether the library gets decoded in the background,
+     * and what the row says can never disagree.
+     */
+    val normalizingVolume: Boolean get() = equalizerEnabled && normalizeVolume
+}
 
 /** The handful of things the user can actually configure. */
 class Settings(private val context: Context) {
@@ -79,6 +94,7 @@ class Settings(private val context: Context) {
         AppSettings(
             webServerEnabled = prefs[WEB_SERVER_ENABLED] ?: false,
             deleteOriginals = prefs[DELETE_ORIGINALS] ?: false,
+            blockScreenshots = prefs[BLOCK_SCREENSHOTS] ?: false,
             lockOnLaunch = prefs[LOCK_ON_LAUNCH] ?: false,
             lockOnPlay = prefs[LOCK_ON_PLAY] ?: false,
             lockOnDock = prefs[LOCK_ON_DOCK] ?: true,
@@ -104,6 +120,8 @@ class Settings(private val context: Context) {
     suspend fun setWebServerEnabled(enabled: Boolean) = put(WEB_SERVER_ENABLED, enabled)
 
     suspend fun setDeleteOriginals(delete: Boolean) = put(DELETE_ORIGINALS, delete)
+
+    suspend fun setBlockScreenshots(block: Boolean) = put(BLOCK_SCREENSHOTS, block)
 
     suspend fun setLockOnLaunch(lock: Boolean) = put(LOCK_ON_LAUNCH, lock)
 
@@ -154,6 +172,7 @@ class Settings(private val context: Context) {
     private companion object {
         val WEB_SERVER_ENABLED = booleanPreferencesKey("web_server_enabled")
         val DELETE_ORIGINALS = booleanPreferencesKey("delete_originals")
+        val BLOCK_SCREENSHOTS = booleanPreferencesKey("block_screenshots")
         val LOCK_ON_LAUNCH = booleanPreferencesKey("lock_on_launch")
         val LOCK_ON_PLAY = booleanPreferencesKey("lock_on_play")
         val LOCK_ON_DOCK = booleanPreferencesKey("lock_on_dock")

@@ -31,10 +31,11 @@ data class EqPreset(val name: String, val bands: List<Int>)
  * centres and Qs that ten fixed faders cannot represent, so while one is loaded it *is* the
  * curve and the faders step aside rather than showing a shape that is not what is playing.
  *
- * Volume normalisation is the other half, and it is deliberately independent of all of that: it
- * needs no curve, it is not affected by one, and switching the equalizer off does not switch it
- * off. What it does need is a measurement — see [Loudness] — which is why the gain it hands
- * [GainProcessor] changes with the track rather than only with the setting.
+ * Volume normalisation is the other half. It needs no curve and is not affected by one, but it
+ * rides the same master switch — the caller only ever asks for it while the equalizer is on, so
+ * one switch silences everything the app does to the sound. What it does need is a measurement —
+ * see [Loudness] — which is why the gain it hands [GainProcessor] changes with the track rather
+ * than only with the setting.
  */
 @UnstableApi
 object AudioEffects {

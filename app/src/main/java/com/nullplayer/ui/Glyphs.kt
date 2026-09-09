@@ -14,9 +14,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -127,20 +129,23 @@ val NextGlyph: Glyph = { extent, color -> drawSkip(extent, color, forward = true
 val PreviousGlyph: Glyph = { extent, color -> drawSkip(extent, color, forward = false) }
 
 /**
- * A bar plus two triangles, mirrored for the backward case.
+ * A bar plus one triangle, mirrored for the backward case.
  *
- * The leading triangle's point lands exactly on the bar's inner edge rather than stopping short
- * of it, and the two triangles meet point-to-base, so the whole mark is one connected run from
- * `-extent` to `+extent` with no floating parts.
+ * One triangle rather than two. Two of them stacked point-to-base is the mark for a *speed* —
+ * fast-forward and rewind — and these buttons do not wind through a track, they step to the next
+ * one. A single triangle run up against a bar is the mark for that step, and it is what a headset,
+ * a lock screen and every other player put on the same control.
+ *
+ * The point lands exactly on the bar's inner edge rather than stopping short of it, so the whole
+ * mark is one connected run from `-extent` to `+extent` with no floating parts. Taller than the
+ * pair it replaces, because a lone triangle has the height to spare and reads better filling it.
  */
 private fun DrawScope.drawSkip(extent: Float, color: Color, forward: Boolean) {
     val direction = if (forward) 1f else -1f
-    val height = extent * 1.1f
+    val height = extent * 1.6f
     val barThickness = extent * 0.22f
-    // Bar plus two triangles span the full width, which is what puts the tip on the bar.
-    val width = extent - barThickness / 2f
 
-    // The face of the bar the triangles point at.
+    // The face of the bar the triangle points at.
     val barFace = direction * (extent - barThickness)
 
     drawRect(
@@ -149,19 +154,17 @@ private fun DrawScope.drawSkip(extent: Float, color: Color, forward: Boolean) {
         size = Size(barThickness, height),
     )
 
-    repeat(2) { index ->
-        val tip = barFace - direction * width * index
-        val back = tip - direction * width
-        drawPath(
-            path = Path().apply {
-                moveTo(tip, 0f)
-                lineTo(back, -height / 2)
-                lineTo(back, height / 2)
-                close()
-            },
-            color = color,
-        )
-    }
+    // The base sits on the far edge, so the triangle spans everything the bar does not.
+    val back = -direction * extent
+    drawPath(
+        path = Path().apply {
+            moveTo(barFace, 0f)
+            lineTo(back, -height / 2)
+            lineTo(back, height / 2)
+            close()
+        },
+        color = color,
+    )
 }
 
 // -- Modes --------------------------------------------------------------------------------------
@@ -519,6 +522,30 @@ val ImportGlyph: Glyph = { extent, color ->
 }
 
 /** Two crossed bars: the "add one" action next to a section heading. */
+/**
+ * A luggage tag: a five-sided label with a punched hole, pointing left.
+ *
+ * Drawn rather than taken from the icon set, because the set shipped with the app has no tag in
+ * it, and this sits in the same bar as [ImportGlyph] where a heavier icon from elsewhere would
+ * read as borrowed. The hole is a second subpath under an even-odd fill rather than a dot in the
+ * page colour, so it stays a hole over the glass rather than a disc of the wrong background.
+ */
+val TagGlyph: Glyph = { extent, color ->
+    drawPath(
+        path = Path().apply {
+            fillType = PathFillType.EvenOdd
+            moveTo(-extent, 0f)
+            lineTo(-extent * 0.34f, -extent * 0.76f)
+            lineTo(extent, -extent * 0.76f)
+            lineTo(extent, extent * 0.76f)
+            lineTo(-extent * 0.34f, extent * 0.76f)
+            close()
+            addOval(Rect(Offset(-extent * 0.5f, 0f), extent * 0.17f))
+        },
+        color = color,
+    )
+}
+
 val PlusGlyph: Glyph = { extent, color ->
     val stroke = extent * 0.22f
     // Short of the full extent, so the arms clear the round button edge at every size.

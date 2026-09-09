@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -52,6 +53,7 @@ import com.nullplayer.ui.EqualizerScreen
 import com.nullplayer.ui.PlayerScreen
 import com.nullplayer.ui.SettingsScreen
 import com.nullplayer.ui.LibraryScreen
+import com.nullplayer.ui.MiniPlayer
 import com.nullplayer.ui.TracksScreen
 
 private enum class Screen { PLAYER, LIBRARY, TRACKS, SETTINGS, EQUALIZER }
@@ -117,6 +119,19 @@ class MainActivity : FragmentActivity() {
 
                 viewModel.markNotificationsAsked()
                 if (!granted) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+
+            // Applied to the window rather than set once at startup, so the switch takes hold on
+            // the screen the user threw it from instead of on the next launch. Nothing is drawn
+            // before the settings arrive — see the `settingsLoaded` branch below — so there is no
+            // moment where the vault is on screen and the flag is not yet on.
+            LaunchedEffect(state.settingsLoaded, state.settings.blockScreenshots) {
+                if (!state.settingsLoaded) return@LaunchedEffect
+                if (state.settings.blockScreenshots) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
             }
 
             // Both locks fail open when nothing is enrolled. A phone whose enrolment was removed
@@ -188,6 +203,23 @@ class MainActivity : FragmentActivity() {
                     )
 
                     else -> {
+                        // One strip, built once, handed to every sub-screen that hosts one. The
+                        // screens themselves stay ignorant of the transport: they are given a slot
+                        // to place at their foot, not eight more callbacks to forward.
+                        val miniPlayer: @Composable (Modifier) -> Unit = { glass ->
+                            MiniPlayer(
+                                state = state,
+                                onPlayPause = viewModel::togglePlay,
+                                onNext = viewModel::next,
+                                onPrevious = viewModel::previous,
+                                onScrub = viewModel::scrub,
+                                onVoiceOver = viewModel::announceCurrentTrack,
+                                onVoiceOverLong = viewModel::announceQueuePosition,
+                                onOpenPlayer = { screen = Screen.PLAYER },
+                                modifier = glass,
+                            )
+                        }
+
                         BackHandler(enabled = visible != Screen.PLAYER) {
                             screen = when {
                                 visible != Screen.TRACKS -> Screen.PLAYER
@@ -205,6 +237,7 @@ class MainActivity : FragmentActivity() {
                                 onScrub = viewModel::scrub,
                                 onSeek = viewModel::seekToFraction,
                                 onToggleTimeMode = viewModel::toggleTimeMode,
+                                onToggleFavorite = viewModel::toggleFavorite,
                                 onGoToTrack = viewModel::goToTrack,
                                 onVoiceOver = viewModel::announceCurrentTrack,
                                 onVoiceOverLong = viewModel::announceQueuePosition,
@@ -252,6 +285,7 @@ class MainActivity : FragmentActivity() {
                                 onUpdateGroup = viewModel::updateGroup,
                                 onDeleteGroup = viewModel::deleteGroup,
                                 onClose = { screen = Screen.PLAYER },
+                                miniPlayer = miniPlayer,
                             )
 
                             Screen.TRACKS -> TracksScreen(
@@ -263,12 +297,14 @@ class MainActivity : FragmentActivity() {
                                     viewModel.playTrack(track)
                                     screen = Screen.PLAYER
                                 },
+                                onSetFavorite = viewModel::setFavorite,
                                 onDelete = viewModel::delete,
                                 onReadSharedGroups = viewModel::readSharedGroups,
                                 onSetTag = viewModel::setTag,
                                 onClose = {
                                     screen = if (tracksFromRibbon) Screen.PLAYER else Screen.LIBRARY
                                 },
+                                miniPlayer = miniPlayer,
                             )
 
                             Screen.SETTINGS -> SettingsScreen(
@@ -276,6 +312,7 @@ class MainActivity : FragmentActivity() {
                                 onLockOnLaunch = viewModel::setLockOnLaunch,
                                 onLockOnPlay = viewModel::setLockOnPlay,
                                 onLockOnDock = viewModel::setLockOnDock,
+                                onBlockScreenshots = viewModel::setBlockScreenshots,
                                 onShowSeeker = viewModel::setShowSeeker,
                                 onShowVaultCounts = viewModel::setShowVaultCounts,
                                 onVoice = viewModel::setVoice,
@@ -283,6 +320,7 @@ class MainActivity : FragmentActivity() {
                                 onRequiredDevice = viewModel::setRequiredDevice,
                                 onPreferredDevice = viewModel::setPreferredDevice,
                                 onClose = { screen = Screen.PLAYER },
+                                miniPlayer = miniPlayer,
                             )
 
                             Screen.EQUALIZER -> EqualizerScreen(
@@ -296,6 +334,7 @@ class MainActivity : FragmentActivity() {
                                 onDismissAutoEqError = viewModel::dismissAutoEqError,
                                 onNormalizeVolume = viewModel::setNormalizeVolume,
                                 onClose = { screen = Screen.PLAYER },
+                                miniPlayer = miniPlayer,
                             )
                         }
                     }
@@ -342,11 +381,14 @@ class MainActivity : FragmentActivity() {
         AppLock.onForeground()
         // Enrolment can be added or removed while the app sits in the background.
         viewModel.refreshBiometrics()
+        // Background work that can wait is told it no longer has to.
+        viewModel.setOnScreen(true)
     }
 
     override fun onStop() {
         super.onStop()
         AppLock.onBackground()
+        viewModel.setOnScreen(false)
     }
 
     private fun askToUnlock(onMessage: (String?) -> Unit) {

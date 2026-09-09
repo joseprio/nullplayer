@@ -66,10 +66,10 @@ import com.nullplayer.playback.PlayerUiState
  * the profile is listed where the faders would be — under the same heading, because it is the same
  * question answered a different way.
  *
- * Volume normalisation sits at the foot of the screen and is the one thing here the title bar's
- * switch does not govern. It belongs on this screen because it is the other half of what the app
- * does to the sound on its way out, but it is not part of the curve: it needs no bands, and
- * levelling a library is a thing plenty of people want without any colouring at all.
+ * Volume normalisation sits at the foot of the screen. It is not part of the curve — it needs no
+ * bands — but it is the other half of what the app does to the sound on its way out, so the title
+ * bar's switch governs it too: off means a file is heard as it was mastered, with nothing to
+ * remember beyond the one switch.
  */
 @Composable
 fun EqualizerScreen(
@@ -83,6 +83,7 @@ fun EqualizerScreen(
     onDismissAutoEqError: () -> Unit,
     onNormalizeVolume: (Boolean) -> Unit,
     onClose: () -> Unit,
+    miniPlayer: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val spec = state.equalizerSpec
@@ -104,32 +105,34 @@ fun EqualizerScreen(
         if (submits > 0 && state.autoEqError == null) importing = false
     }
 
-    Box(modifier.fillMaxSize().background(BACKGROUND)) {
+    GlassScaffold(
+        topBar = { glass ->
+            // The switch rides the title bar rather than sitting in a panel of its own: it governs
+            // the curve below it, and a screen whose first row is a control for the rest of the
+            // screen reads as one more setting among them.
+            ScreenHeader(onBack = onClose, modifier = glass) {
+                Text(
+                    text = "equalizer",
+                    color = TEXT,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 2.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                NullSwitch(
+                    checked = state.settings.equalizerEnabled,
+                    onCheckedChange = onEnabled,
+                )
+            }
+        },
+        bottomBar = miniPlayer,
+        modifier = modifier,
+    ) { top, inset ->
         LazyColumn(
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 44.dp, bottom = 40.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = top, bottom = 20.dp + inset),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item {
-                // The switch rides the title bar rather than sitting in a panel of its own: it
-                // governs the curve below it, and a screen whose first row is a control for the
-                // rest of the screen reads as one more setting among them.
-                ScreenHeader(onBack = onClose) {
-                    Text(
-                        text = "equalizer",
-                        color = TEXT,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 2.sp,
-                        modifier = Modifier.weight(1f),
-                    )
-                    NullSwitch(
-                        checked = state.settings.equalizerEnabled,
-                        onCheckedChange = onEnabled,
-                    )
-                }
-                Spacer(Modifier.height(22.dp))
-            }
-
             item {
                 SectionHeader("Bands") {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -202,17 +205,16 @@ fun EqualizerScreen(
             item { SectionHeader("Volume normalization") }
             item {
                 Panel {
-                    // Deliberately not disabled when the equalizer is off. This is the one control
-                    // here that does not touch the curve, and tying it to the master switch would
-                    // make a flat, levelled library impossible to ask for.
                     ToggleRow(
                         title = "Match track volume",
                         subtitle = normalizationStatus(
+                            active = active,
                             enabled = state.settings.normalizeVolume,
                             unmeasured = state.unmeasuredTracks,
                         ),
                         checked = state.settings.normalizeVolume,
                         onCheckedChange = onNormalizeVolume,
+                        enabled = active,
                     )
                 }
             }
@@ -243,7 +245,8 @@ fun EqualizerScreen(
  * the first time is not levelled for the first few minutes. Saying how many are left turns that
  * into something visibly finishing rather than a setting that appears not to work yet.
  */
-private fun normalizationStatus(enabled: Boolean, unmeasured: Int): String = when {
+private fun normalizationStatus(active: Boolean, enabled: Boolean, unmeasured: Int): String = when {
+    !active -> "Needs the equalizer switched on."
     enabled && unmeasured == 1 -> "Measuring the last track…"
     enabled && unmeasured > 0 -> "Measuring $unmeasured tracks…"
     enabled -> "Every track plays at the same loudness."

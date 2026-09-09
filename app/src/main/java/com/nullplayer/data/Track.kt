@@ -25,6 +25,15 @@ data class Track(
     /** Playback order in the vault. */
     val sortIndex: Int,
     /**
+     * Marked by hand as a favourite.
+     *
+     * On the track rather than in `track_groups`, even though the Favorites tile behaves like a
+     * group: it is one flag per track, it is toggled from the player where no group is in view,
+     * and keeping it off the tag table means the tile can never be renamed, recoloured or deleted
+     * from the library the way a real group can.
+     */
+    val favorite: Boolean = false,
+    /**
      * Integrated loudness in LUFS, or null while the file is still waiting to be measured.
      *
      * Nullable rather than zeroed, because "not measured yet" and "measured, and it is silence"

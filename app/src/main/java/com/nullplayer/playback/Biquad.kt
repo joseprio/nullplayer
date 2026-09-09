@@ -1,6 +1,7 @@
 package com.nullplayer.playback
 
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.sin
@@ -37,7 +38,12 @@ data class BiquadCoefficients(
             if (sampleRate <= 0 || filter.frequencyHz <= 0.0 || filter.frequencyHz >= nyquist) {
                 return PASSTHROUGH
             }
-            if (filter.gainDb == 0.0) return PASSTHROUGH
+            // Not just an exact zero. A profile can carry sections of a hundredth of a decibel —
+            // AutoEQ produces them where its target and the measurement happen to agree — and each
+            // one is a fifth of the audio thread's inner loop spent on something no ear will ever
+            // resolve. The threshold is two orders of magnitude below the smallest level change
+            // anyone reports hearing, so nothing audible is being traded for it.
+            if (abs(filter.gainDb) < MIN_AUDIBLE_GAIN_DB) return PASSTHROUGH
 
             val q = filter.q.coerceAtLeast(MIN_Q)
             val a = 10.0.pow(filter.gainDb / 40.0)
@@ -97,6 +103,9 @@ data class BiquadCoefficients(
         }
 
         /** Below this a section rings hard enough to be an oscillator rather than a filter. */
+        /** Below this, a section is doing nothing worth the arithmetic. */
+        private const val MIN_AUDIBLE_GAIN_DB = 0.05
+
         private const val MIN_Q = 0.05
     }
 }
@@ -113,14 +122,38 @@ data class BiquadCoefficients(
  * makes a filter click.
  */
 class BiquadCascade(
-    private val sections: List<BiquadCoefficients>,
+    sections: List<BiquadCoefficients>,
     private val channelCount: Int,
 ) {
-    // [section][channel], flattened: the inner loop walks channels, so they sit adjacent.
-    private val z1 = DoubleArray(sections.size * channelCount)
-    private val z2 = DoubleArray(sections.size * channelCount)
+    private val sectionCount = sections.size
 
-    val isEmpty: Boolean get() = sections.isEmpty()
+    /**
+     * The coefficients, flattened to `b0, b1, b2, a1, a2` per section.
+     *
+     * Held as bare doubles rather than as the [BiquadCoefficients] they were built from because
+     * of where this is read: once per section per channel per sample, which at a ten-section
+     * profile in stereo is around ten million reads a second. A list of objects costs an interface
+     * call and a pointer chase for each of them, to fetch five fields that could have been lying
+     * end to end in one array. The maths is unchanged; only the fetching is.
+     */
+    private val coefficients = DoubleArray(sectionCount * COEFFICIENTS)
+
+    // [section][channel], flattened: the inner loop walks channels, so they sit adjacent.
+    private val z1 = DoubleArray(sectionCount * channelCount)
+    private val z2 = DoubleArray(sectionCount * channelCount)
+
+    init {
+        sections.forEachIndexed { index, section ->
+            val at = index * COEFFICIENTS
+            coefficients[at] = section.b0
+            coefficients[at + 1] = section.b1
+            coefficients[at + 2] = section.b2
+            coefficients[at + 3] = section.a1
+            coefficients[at + 4] = section.a2
+        }
+    }
+
+    val isEmpty: Boolean get() = sectionCount == 0
 
     /** Clears the delay lines. Used when playback jumps, so the old audio does not ring on. */
     fun reset() {
@@ -128,17 +161,64 @@ class BiquadCascade(
         z2.fill(0.0)
     }
 
+    /**
+     * Runs [count] samples of one channel through every section, in place.
+     *
+     * The same arithmetic as [process], turned inside out. Per sample, that one has to fetch five
+     * coefficients and two delay values from arrays and put two back, because the next sample it
+     * sees belongs to a different section. This one runs a whole buffer through one section before
+     * moving to the next, so those seven values are read into locals once and stay in registers
+     * for the entire pass — what crosses memory is the audio, and only the audio.
+     *
+     * Applying a section to a whole buffer and then the next to its output is exactly a cascade:
+     * each section is a causal filter carrying its own state, and that state is picked up and put
+     * back around the pass, so a buffer boundary is invisible to it.
+     */
+    fun process(channel: Int, samples: DoubleArray, count: Int) {
+        var at = 0
+        var slot = channel
+        repeat(sectionCount) {
+            val b0 = coefficients[at]
+            val b1 = coefficients[at + 1]
+            val b2 = coefficients[at + 2]
+            val a1 = coefficients[at + 3]
+            val a2 = coefficients[at + 4]
+            var s1 = z1[slot]
+            var s2 = z2[slot]
+            for (index in 0 until count) {
+                val sample = samples[index]
+                val out = b0 * sample + s1
+                s1 = b1 * sample - a1 * out + s2
+                s2 = b2 * sample - a2 * out
+                samples[index] = out
+            }
+            z1[slot] = s1
+            z2[slot] = s2
+            at += COEFFICIENTS
+            slot += channelCount
+        }
+    }
+
     /** Runs one sample of one channel through every section, in order. */
     fun process(channel: Int, sample: Double): Double {
         var value = sample
-        for (index in sections.indices) {
-            val section = sections[index]
-            val slot = index * channelCount + channel
-            val out = section.b0 * value + z1[slot]
-            z1[slot] = section.b1 * value - section.a1 * out + z2[slot]
-            z2[slot] = section.b2 * value - section.a2 * out
+        var at = 0
+        // Both walks are strides rather than multiplications, for the same reason the coefficients
+        // are flat: this is the innermost loop in the app.
+        var slot = channel
+        repeat(sectionCount) {
+            val out = coefficients[at] * value + z1[slot]
+            z1[slot] = coefficients[at + 1] * value - coefficients[at + 3] * out + z2[slot]
+            z2[slot] = coefficients[at + 2] * value - coefficients[at + 4] * out
             value = out
+            at += COEFFICIENTS
+            slot += channelCount
         }
         return value
+    }
+
+    private companion object {
+        /** `b0, b1, b2, a1, a2`: `a0` is already divided out by [BiquadCoefficients]. */
+        const val COEFFICIENTS = 5
     }
 }

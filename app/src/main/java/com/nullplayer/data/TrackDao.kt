@@ -43,6 +43,20 @@ interface TrackDao {
     )
     suspend fun inGroup(groupId: String): List<Track>
 
+    /** Everything hearted, in vault order — the Favorites tile's queue. */
+    @Query("SELECT * FROM tracks WHERE favorite = 1 ORDER BY sortIndex ASC")
+    fun observeFavorites(): Flow<List<Track>>
+
+    @Query("SELECT * FROM tracks WHERE favorite = 1 ORDER BY sortIndex ASC")
+    suspend fun favorites(): List<Track>
+
+    /** Watched on its own, because the tile appears and disappears on this count alone. */
+    @Query("SELECT COUNT(*) FROM tracks WHERE favorite = 1")
+    fun observeFavoriteCount(): Flow<Int>
+
+    @Query("UPDATE tracks SET favorite = :favorite WHERE id = :id")
+    suspend fun setFavorite(id: String, favorite: Boolean)
+
     @Query("SELECT * FROM tracks WHERE id = :id")
     suspend fun byId(id: String): Track?
 

@@ -69,6 +69,8 @@ dependencies {
 
     implementation(libs.nanohttpd)
 
+    implementation(libs.haze)
+
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)

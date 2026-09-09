@@ -50,6 +50,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
+/**
+ * How many favourites it takes before the tile is offered.
+ *
+ * The tile stands as soon as anything is hearted. It is hidden only while nothing is, because a
+ * tile that could never be anything but empty is a tile worth nobody's swipe.
+ */
+private const val FAVORITES_MINIMUM = 0
+
 data class PlayerUiState(
     val isPlaying: Boolean = false,
     val isSpeaking: Boolean = false,
@@ -60,6 +68,8 @@ data class PlayerUiState(
     val browseTracks: List<Track> = emptyList(),
     /** The groups every currently selected track already belongs to. */
     val sharedGroupIds: Set<String> = emptySet(),
+    /** How many tracks are hearted. The Favorites tile stands or falls on this alone. */
+    val favoriteCount: Int = 0,
     /** How much is in the vault as a whole, for the ribbon's first tile. */
     val vaultCount: Int = 0,
     /** Position in the queue, or -1 before anything has been chosen. */
@@ -103,23 +113,57 @@ data class PlayerUiState(
     val hasTracks: Boolean get() = tracks.isNotEmpty()
     val isImporting: Boolean get() = importsInFlight > 0
 
+    /** Whether the Favorites tile is standing. Everything that names it has to ask first. */
+    val hasFavorites: Boolean get() = favoriteCount > FAVORITES_MINIMUM
+
     /**
-     * The tile the ribbon has selected. Blank means the whole vault, which is also the fallback
-     * when a group has been deleted out from under the selection.
+     * The tile the queue is drawn from.
+     *
+     * A stored id is only honoured while the tile it names still exists — a group can be deleted,
+     * and Favorites can fall below its threshold, and either would otherwise leave the ribbon
+     * pointing at nothing.
      */
     val activeGroupId: String
-        get() = settings.activeGroupId.takeIf { id -> groups.any { it.id == id } }.orEmpty()
+        get() = settings.activeGroupId.takeIf { id -> tileExists(id) }.orEmpty()
+
+    private fun tileExists(id: String): Boolean = when (id) {
+        Group.VAULT_ID -> true
+        Group.FAVORITES_ID -> hasFavorites
+        else -> groups.any { it.id == id }
+    }
+
+    /** What a tile is called, whether or not it has a row of its own. */
+    fun tileName(id: String): String = when (id) {
+        Group.FAVORITES_ID -> Group.FAVORITES_NAME
+        else -> groups.firstOrNull { it.id == id }?.name ?: Group.VAULT_NAME
+    }
+
+    fun tileColor(id: String): Int = when (id) {
+        Group.FAVORITES_ID -> Group.FAVORITES_COLOR
+        else -> groups.firstOrNull { it.id == id }?.colorArgb ?: Group.VAULT_COLOR
+    }
 
     val browseGroup: GroupSummary? get() = groups.firstOrNull { it.id == browseGroupId }
 
     /** The name at the top of whichever list is open. */
-    val browseName: String get() = browseGroup?.name ?: Group.VAULT_NAME
+    val browseName: String get() = tileName(browseGroupId)
 
-    val browseColor: Int get() = browseGroup?.colorArgb ?: Group.VAULT_COLOR
+    val browseColor: Int get() = tileColor(browseGroupId)
 
     /** The tile the queue is drawn from, which need not be the one being browsed. */
-    val activeName: String
-        get() = groups.firstOrNull { it.id == activeGroupId }?.name ?: Group.VAULT_NAME
+    val activeName: String get() = tileName(activeGroupId)
+
+    /** Its colour, so the mini player's pill matches the ribbon chip it stands for. */
+    val activeColor: Int get() = tileColor(activeGroupId)
+
+    /**
+     * Whether the track playing is hearted.
+     *
+     * Read off the queue rather than kept as its own field, so the heart on the player and the
+     * heart on that track's row in the dock can never disagree — both are the same row.
+     */
+    val currentIsFavorite: Boolean
+        get() = tracks.getOrNull(trackIndex)?.favorite == true
 
     /**
      * Why pressing play would be refused, or null if it would not.
@@ -193,6 +237,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     /** The tile the live queue was built from, so a switch can be told from an edit to one list. */
     private var queuedGroupId: String? = null
 
+    /**
+     * Whether the app is actually on screen, as told by the Activity's own start and stop.
+     *
+     * Only the measuring sweep asks. Nothing else here cares where the user is looking, and this
+     * is a ViewModel rather than a process-wide observer precisely because it dies with the
+     * Activity that feeds it — a stale `true` would be worse than not knowing.
+     */
+    private val onScreen = MutableStateFlow(false)
+
     /** The title handed to the media session. Never a track name. */
     private val anonymousMetadata = MediaMetadata.Builder()
         .setTitle(application.getString(R.string.app_name))
@@ -240,6 +293,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             // The vault tile counts everything, whatever tile happens to be selected.
             repository.observeTracks(Group.VAULT_ID).collect { all ->
                 _state.update { it.copy(vaultCount = all.size) }
+            }
+        }
+        viewModelScope.launch {
+            repository.observeFavoriteCount().collect { count ->
+                _state.update { it.copy(favoriteCount = count) }
             }
         }
         viewModelScope.launch {
@@ -323,10 +381,22 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             // The pending count is narrowed to "is there any" before it reaches here. Left as a
             // number it would re-emit after every single track, and `collectLatest` would cancel
             // the very sweep that produced the change.
+            //
+            // The third term is what keeps the sweep out of the way. Measuring is decoding, and a
+            // decode running against the decode that is feeding the speaker is a contest the
+            // listener can hear — but only once the app is off screen, where the process is
+            // scheduled on less than it had a moment ago. So the sweep runs whenever the app is
+            // being looked at, and whenever nothing is playing, and pauses in the one case that
+            // is neither. `collectLatest` stops it mid-track when that case arrives; the track is
+            // simply measured again next time, which the sweep already had to survive.
             combine(
-                settings.all.map { it.normalizeVolume }.distinctUntilChanged(),
+                settings.all.map { it.normalizingVolume }.distinctUntilChanged(),
                 loudness.remaining.map { it > 0 }.distinctUntilChanged(),
-            ) { normalizing, pending -> normalizing && pending }
+                combine(
+                    onScreen,
+                    _state.map { it.isPlaying }.distinctUntilChanged(),
+                ) { visible, playing -> visible || !playing },
+            ) { normalizing, pending, unobtrusive -> normalizing && pending && unobtrusive }
                 .distinctUntilChanged()
                 .collectLatest { work -> if (work) loudness.drain() }
         }
@@ -346,6 +416,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         refreshBiometrics()
+    }
+
+    /** Told by the Activity, which is the only thing in a position to know. */
+    fun setOnScreen(onScreen: Boolean) {
+        this.onScreen.value = onScreen
     }
 
     /** Enrolment can change while the app is open, so this is re-read on every resume. */
@@ -404,6 +479,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 .build()
         }
 
+        // An edit to the queue that is playing is patched in place where it can be. Handing the
+        // player a whole new list tears its decoders down and refills its buffers, which is
+        // audible — and an import emits one of these per track, so a batch uploaded through the
+        // web manager would otherwise chew a hole in the song playing for every file that landed.
+        if (!switched && playingId != null && patchQueue(player, existing, wanted, items)) return
+
         val carriedOver = tracks.indexOfFirst { it.id == playingId }
         val start = when {
             // The track came along with the switch, so it keeps its place and its position.
@@ -426,6 +507,43 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         // reads as a fault rather than as an answer.
         player.playWhenReady =
             wasPlaying && (carriedOver >= 0 || (switched && items.isNotEmpty()))
+    }
+
+    /**
+     * Edits the live queue instead of replacing it, and says whether it could.
+     *
+     * Only insertions and deletions are expressible this way, so the tracks common to both lists
+     * have to appear in the same order in each; a genuine reordering is left to the caller's
+     * rebuild. So is the disappearance of the track being played — removing it would have the
+     * player slide onto whatever followed, and stopping is the answer [syncQueue] deliberately
+     * gives when a file goes away underneath it.
+     *
+     * Deletions run from the back so that each index is still the one measured; insertions then
+     * run from the front, where what remains of the old queue is a subsequence of the new one and
+     * every missing track goes in at its final position.
+     */
+    private fun patchQueue(
+        player: Player,
+        existing: List<String>,
+        wanted: List<String>,
+        items: List<MediaItem>,
+    ): Boolean {
+        val wantedIds = wanted.toSet()
+        val existingIds = existing.toSet()
+        if (player.currentMediaItem?.mediaId !in wantedIds) return false
+
+        val kept = existing.filter { it in wantedIds }
+        if (kept != wanted.filter { it in existingIds }) return false
+
+        for (index in existing.indices.reversed()) {
+            if (existing[index] !in wantedIds) player.removeMediaItem(index)
+        }
+        wanted.forEachIndexed { index, id ->
+            if (index >= player.mediaItemCount || player.getMediaItemAt(index).mediaId != id) {
+                player.addMediaItem(index, items[index])
+            }
+        }
+        return true
     }
 
     // -- Transport --------------------------------------------------------------------------
@@ -468,7 +586,17 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             // onto the gate by whoever pressed it, and never comes back out of here.
             PlaybackGate.Block.VOICE_OVER_OUTPUT, null -> Unit
         }
-        if (player.playbackState == Player.STATE_IDLE) player.prepare()
+        when (player.playbackState) {
+            Player.STATE_IDLE -> player.prepare()
+            // A queue that has run out sits in STATE_ENDED with `playWhenReady` still true, so
+            // `play()` on its own changes nothing: no field moves, therefore no listener fires,
+            // therefore [readPlayback] never runs and the ticker it starts stays dead. The seeker
+            // sits at the end of the last track and the button keeps offering a play that does
+            // nothing. Sending the player back to the top of the track is what Media3's own
+            // `Util.handlePlayButtonAction` does for this state, which is why the notification's
+            // play button has always recovered from it and this one did not.
+            Player.STATE_ENDED -> player.seekToDefaultPosition()
+        }
         player.play()
     }
 
@@ -552,19 +680,32 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         readPosition()
     }
 
+    /**
+     * Where in the queue a skip lands is the service's player to decide, not this screen's — it
+     * wraps at both ends whatever the repeat mode is; see `CircularPlayer` in [PlaybackService].
+     *
+     * Asked for as a custom command rather than by calling the player: the ordinary skip is
+     * withdrawn from a controller at the ends of a non-repeating queue, which is precisely where
+     * the wrap has work to do. See [QueueCommands].
+     */
     fun next() {
-        val player = controller ?: return
-        if (player.hasNextMediaItem()) player.seekToNextMediaItem() else player.seekTo(0, 0L)
+        if (controller == null) return
+        sendCommand(QueueCommands.SKIP_NEXT)
         readPosition()
     }
 
-    /** Restarts the current track first, then steps back — the usual double-press behaviour. */
+    /**
+     * Restarts the current track first, then steps back — the usual double-press behaviour.
+     *
+     * The restart is a seek within the track playing, which no queue position can take away, so
+     * only the step back has to go the long way round.
+     */
     fun previous() {
         val player = controller ?: return
-        if (player.currentPosition > RESTART_THRESHOLD_MS || !player.hasPreviousMediaItem()) {
+        if (player.currentPosition > RESTART_THRESHOLD_MS) {
             player.seekTo(0L)
         } else {
-            player.seekToPreviousMediaItem()
+            sendCommand(QueueCommands.SKIP_PREVIOUS)
         }
         readPosition()
     }
@@ -843,10 +984,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         if (_state.value.volume == 0) notify("Media volume is muted.")
-        sendVoiceCommand(action, args)
+        sendCommand(action, args)
     }
 
-    private fun sendVoiceCommand(action: String, args: Bundle = Bundle.EMPTY) {
+    /** Anything the service does on the UI's behalf goes out this way. */
+    private fun sendCommand(action: String, args: Bundle = Bundle.EMPTY) {
         controller?.sendCustomCommand(SessionCommand(action, Bundle.EMPTY), args)
     }
 
@@ -1013,6 +1155,27 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /**
+     * Hearts or unhearts the track playing.
+     *
+     * The queue is not rebuilt for it. Un-hearting from inside the Favorites queue would otherwise
+     * pull the track out from under the player mid-song, which is the one thing [syncQueue] goes
+     * out of its way not to do — the row leaves the tile, and the queue catches up at the next
+     * switch.
+     */
+    fun toggleFavorite() {
+        val track = _state.value.tracks.getOrNull(_state.value.trackIndex) ?: return
+        setFavorite(track, !track.favorite)
+    }
+
+    fun setFavorite(track: Track, favorite: Boolean) {
+        viewModelScope.launch { repository.setFavorite(track.id, favorite) }
+    }
+
+    fun setBlockScreenshots(block: Boolean) {
+        viewModelScope.launch { settings.setBlockScreenshots(block) }
+    }
+
     fun setLockOnLaunch(lock: Boolean) {
         viewModelScope.launch { settings.setLockOnLaunch(lock) }
         // The user is already inside the app; challenging them the instant they flip the switch
@@ -1053,6 +1216,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         controller?.release()
         controller = null
         webServer.stop()
+        loudness.release()
         super.onCleared()
     }
 

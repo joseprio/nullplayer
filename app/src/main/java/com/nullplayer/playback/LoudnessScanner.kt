@@ -1,14 +1,16 @@
 package com.nullplayer.playback
 
+import android.os.Process
 import android.util.Log
 import com.nullplayer.data.VaultRepository
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 
 private const val TAG = "LoudnessScanner"
 
@@ -36,6 +38,30 @@ class LoudnessScanner(private val repository: VaultRepository) {
      */
     private val skipped = MutableStateFlow<Set<String>>(emptySet())
 
+    /**
+     * The sweep's own thread, and deliberately a lowly one.
+     *
+     * `Dispatchers.Default` was the obvious home and the wrong one. Its threads run at the normal
+     * priority every other piece of app work gets, and measuring is not normal work: it is a
+     * decode of a whole track, sample by sample through the meter's filters, competing for the
+     * same cores as the decode of the track being *listened to*. On screen that contest is invisible
+     * — the foreground process has the big cores and clocks to spare. With the screen off it is
+     * the same two jobs on a much smaller ration, and the one with a deadline is the one that
+     * shows when it loses.
+     *
+     * A thread of its own is what makes the priority safe to set: dropping a shared pool thread to
+     * background would leave it there for whatever unrelated work landed on it next. At
+     * [Process.THREAD_PRIORITY_BACKGROUND] the scheduler puts this in the background group, where
+     * it gets what is spare and nothing more — which is exactly the standing a sweep with no
+     * deadline should have.
+     */
+    private val sweepThread = Executors.newSingleThreadExecutor { work ->
+        Thread({
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+            work.run()
+        }, "loudness-sweep")
+    }.asCoroutineDispatcher()
+
     /** How many tracks are genuinely still to measure: the unmeasured, less the unreadable. */
     val remaining: Flow<Int> =
         combine(repository.observeUnmeasured(), skipped) { pending, unreadable ->
@@ -43,7 +69,7 @@ class LoudnessScanner(private val repository: VaultRepository) {
         }
 
     /** Runs until nothing is left to measure. Cancel it to stop between — or during — tracks. */
-    suspend fun drain() = withContext(Dispatchers.Default) {
+    suspend fun drain() = withContext(sweepThread) {
         while (true) {
             val unreadable = skipped.value
             val next = repository.unmeasured().firstOrNull { it.id !in unreadable }
@@ -57,6 +83,11 @@ class LoudnessScanner(private val repository: VaultRepository) {
             }
             delay(BREATH_MS)
         }
+    }
+
+    /** Lets the thread go when the owner does; it is idle but it is still a thread. */
+    fun release() {
+        sweepThread.close()
     }
 
     private companion object {

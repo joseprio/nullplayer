@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.media.AudioManager
 import android.os.Bundle
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -17,6 +18,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.ExoPlayer
@@ -116,7 +118,11 @@ class PlaybackService : MediaSessionService() {
 
         session = MediaSession.Builder(
             this,
-            GuardedPlayer(AnonymousPlayer(exoPlayer, getString(R.string.app_name)) { sourceName })
+            GuardedPlayer(
+                AnonymousPlayer(CircularPlayer(exoPlayer), getString(R.string.app_name)) {
+                    sourceName
+                }
+            )
         )
             .setCallback(VoiceOverCallback())
             .setCustomLayout(listOf(speakButton()))
@@ -131,6 +137,7 @@ class PlaybackService : MediaSessionService() {
             .build()
 
         exoPlayer.addListener(PlaybackTicket())
+        exoPlayer.addAnalyticsListener(PlaybackDiagnostics())
         ContextCompat.registerReceiver(
             this,
             becomingNoisy,
@@ -271,6 +278,11 @@ class PlaybackService : MediaSessionService() {
                 }
                 VoiceCommands.SPEAK_POSITION -> if (PlaybackGate.allowVoiceOver()) speakPosition()
                 VoiceCommands.STOP_SPEAKING -> voiceOver.stop()
+                // Performed here rather than by the caller so the wrap is decided against the
+                // real queue: only this side knows the shuffled order, and only this side is
+                // past the command gate that closes at the ends of a non-repeating queue.
+                QueueCommands.SKIP_NEXT -> session.player.seekToNextMediaItem()
+                QueueCommands.SKIP_PREVIOUS -> session.player.seekToPreviousMediaItem()
                 else -> return Futures.immediateFuture(
                     SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED)
                 )
@@ -336,6 +348,7 @@ class PlaybackService : MediaSessionService() {
             .buildUpon()
             .apply {
                 VoiceCommands.ALL.forEach { add(SessionCommand(it, Bundle.EMPTY)) }
+                QueueCommands.ALL.forEach { add(SessionCommand(it, Bundle.EMPTY)) }
                 if (!speakable) {
                     remove(SessionCommand(VoiceCommands.SPEAK_TRACK, Bundle.EMPTY))
                     remove(SessionCommand(VoiceCommands.SPEAK_POSITION, Bundle.EMPTY))
@@ -407,11 +420,20 @@ class PlaybackService : MediaSessionService() {
             PlaybackGate.state
                 .map { it.preferredDeviceKey to it.outputs }
                 .distinctUntilChanged()
-                .collect { (key, _) ->
-                    player?.setPreferredAudioDevice(
-                        key.takeIf { it.isNotEmpty() }?.let { outputs.resolve(it) }
-                    )
-                }
+                // The list has to be watched, because a preference only becomes applicable when
+                // the device it names turns up. But it must not be what decides to *act*: a phone
+                // with a watch, a pair of earbuds and a car on its books sees that list change on
+                // its own, and re-applying the same device to a playing track is not free. It asks
+                // the audio server to reconsider the routing, and if the track is moved as a
+                // result the old one is invalidated underneath it — `dead IAudioTrack` in the log,
+                // and a gap in the music that has nothing to do with the music.
+                //
+                // So the resolved device is what the change is judged on. An id is stable while a
+                // device stays connected and fresh when it comes back, which is exactly the line
+                // between "the list moved" and "our device did".
+                .map { (key, _) -> key.takeIf { it.isNotEmpty() }?.let { outputs.resolve(it) } }
+                .distinctUntilChanged { old, new -> old?.id == new?.id }
+                .collect { device -> player?.setPreferredAudioDevice(device) }
         }
         scope.launch {
             PlaybackGate.state
@@ -446,6 +468,67 @@ class PlaybackService : MediaSessionService() {
             ) {
                 refreshNotificationControls()
             }
+        }
+    }
+
+    /**
+     * Why the music broke up, when it does.
+     *
+     * A stutter has two quite different causes and they are indistinguishable by ear. An underrun
+     * is the sink running dry: the audio thread did not refill the track in time, which on a
+     * vault of local files means the CPU was elsewhere — the per-sample work in [GainProcessor]
+     * and [EqualizerProcessor] is real, and a backgrounded process is scheduled on smaller cores
+     * at lower clocks than the one that was on screen a moment ago. A drop to [Player.STATE_BUFFERING]
+     * is the opposite: the sink was willing and there was nothing to give it, which would point at
+     * the read and decrypt path instead.
+     *
+     * Both are logged rather than counted. They are supposed to be rare enough that a line each is
+     * the right weight, and a listening session with the screen off then answers the question that
+     * guessing cannot.
+     */
+    private inner class PlaybackDiagnostics : AnalyticsListener {
+
+        override fun onAudioUnderrun(
+            eventTime: AnalyticsListener.EventTime,
+            bufferSize: Int,
+            bufferSizeMs: Long,
+            elapsedSinceLastFeedMs: Long,
+        ) {
+            // `elapsedSinceLastFeedMs` against `bufferSizeMs` is the whole diagnosis: a gap longer
+            // than the buffer is how long the audio thread went unscheduled.
+            Log.w(
+                TAG,
+                "Audio underrun: the sink held ${bufferSizeMs}ms ($bufferSize bytes) and went " +
+                    "${elapsedSinceLastFeedMs}ms without a refill",
+            )
+        }
+
+        override fun onPlaybackStateChanged(
+            eventTime: AnalyticsListener.EventTime,
+            state: Int,
+        ) {
+            if (state == Player.STATE_BUFFERING) {
+                Log.w(TAG, "Rebuffering at ${eventTime.currentPlaybackPositionMs}ms")
+            }
+        }
+
+        /** Says what the sink actually settled on, which is not always what its defaults asked for. */
+        override fun onAudioTrackInitialized(
+            eventTime: AnalyticsListener.EventTime,
+            config: AudioSink.AudioTrackConfig,
+        ) {
+            Log.i(
+                TAG,
+                "Audio track: ${config.bufferSize} bytes at ${config.sampleRate} Hz, " +
+                    "encoding ${config.encoding}, offload ${config.offload}",
+            )
+        }
+
+        override fun onAudioSinkError(
+            eventTime: AnalyticsListener.EventTime,
+            audioSinkError: Exception,
+        ) {
+            Log.w(TAG, "Audio sink error", audioSinkError)
         }
     }
 
@@ -502,11 +585,14 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    /** Keeps volume normalisation in step with the stored setting. */
+    /**
+     * Keeps volume normalisation in step with the stored setting — and with the equalizer's own
+     * switch, which levelling rides along with rather than standing beside.
+     */
     private fun watchNormalization() {
         scope.launch {
             settings.all
-                .map { it.normalizeVolume }
+                .map { it.normalizingVolume }
                 .distinctUntilChanged()
                 .collect { AudioEffects.setNormalization(it) }
         }
@@ -596,6 +682,108 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    // -- The queue as a ring --------------------------------------------------------------------
+
+    /**
+     * Skipping wraps: next from the last track lands on the first, previous from the first on the
+     * last, whatever the repeat mode says.
+     *
+     * Repeat answers what happens when a track *ends* — whether the queue plays on past its end by
+     * itself. Media3 lets it answer the skip buttons as well, which runs two questions together: a
+     * press of next is an instruction rather than a request to play on, and it should mean the
+     * same thing wherever in the queue it is pressed. Media3 already reads REPEAT_MODE_ONE this
+     * way — a skip leaves the track instead of replaying it — and this extends the same reading to
+     * REPEAT_MODE_OFF, so the two skip buttons behave identically in all three modes.
+     *
+     * It sits below [AnonymousPlayer] so that everything reaches it: the player screen through its
+     * controller, and a headset or head unit through the session.
+     */
+    private class CircularPlayer(player: Player) : ForwardingPlayer(player) {
+
+        /**
+         * The skip commands, granted for as long as there is a queue at all.
+         *
+         * ExoPlayer withdraws these at the ends of a non-repeating queue, and a withdrawn command
+         * is not merely unadvertised: `MediaSessionLegacyStub` checks it against the controller's
+         * granted set and drops the press without ever reaching the player. So a headset, a car
+         * head unit, a watch or the lock screen could not wrap the queue even though the buttons
+         * on screen could — the screen goes the long way round, through [QueueCommands].
+         *
+         * Re-granting them here rather than in the session is deliberate: what a controller may do
+         * is the intersection of what the session grants and what the player reports, and the
+         * player is the half that was saying no.
+         *
+         * Overriding the getter is enough, and the listener is deliberately left alone. A session
+         * treats the commands handed to `onAvailableCommandsChanged` as a signal rather than as
+         * the value — it rebuilds its picture of the player from the getters — so the withdrawal
+         * ExoPlayer reports at the end of the queue still arrives to trigger the refresh, and the
+         * refresh then reads the set below.
+         */
+        private fun wrap(commands: Player.Commands): Player.Commands =
+            if (mediaItemCount == 0) {
+                commands
+            } else {
+                commands.buildUpon().addAll(
+                    Player.COMMAND_SEEK_TO_NEXT,
+                    Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+                    Player.COMMAND_SEEK_TO_PREVIOUS,
+                    Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+                ).build()
+            }
+
+        override fun getAvailableCommands(): Player.Commands = wrap(super.getAvailableCommands())
+
+        /**
+         * Answered from [getAvailableCommands] rather than passed down, because
+         * [ForwardingPlayer.isCommandAvailable] asks the wrapped player directly and would walk
+         * straight past the override above.
+         */
+        override fun isCommandAvailable(command: Int): Boolean =
+            availableCommands.contains(command)
+
+        override fun seekToNextMediaItem() = step(forward = true)
+
+        override fun seekToPreviousMediaItem() = step(forward = false)
+
+        override fun seekToNext() = step(forward = true)
+
+        /**
+         * A hardware "previous" carries the same restart-first rule as the button on screen, and
+         * Media3's own threshold for it is the one both are measured against.
+         */
+        override fun seekToPrevious() {
+            if (currentPosition > maxSeekToPreviousPosition) seekTo(0L) else step(forward = false)
+        }
+
+        /**
+         * One step through the queue, closing the ring by hand at either end.
+         *
+         * The neighbour is asked for as if repeat were off, which is the only mode that reports
+         * the true ends; an unset answer *is* an end, and the far end is where it goes. The
+         * timeline is asked rather than the indices being counted, so with shuffle on "the first"
+         * means the first of the shuffled order rather than of the list.
+         */
+        private fun step(forward: Boolean) {
+            val timeline = currentTimeline
+            if (timeline.isEmpty) return
+
+            val shuffled = shuffleModeEnabled
+            val here = currentMediaItemIndex
+            val neighbour = if (forward) {
+                timeline.getNextWindowIndex(here, Player.REPEAT_MODE_OFF, shuffled)
+            } else {
+                timeline.getPreviousWindowIndex(here, Player.REPEAT_MODE_OFF, shuffled)
+            }
+
+            val target = when {
+                neighbour != C.INDEX_UNSET -> neighbour
+                forward -> timeline.getFirstWindowIndex(shuffled)
+                else -> timeline.getLastWindowIndex(shuffled)
+            }
+            if (target != C.INDEX_UNSET) seekTo(target, C.TIME_UNSET)
+        }
+    }
+
     // -- Anonymity ------------------------------------------------------------------------------
 
     /**
@@ -632,6 +820,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private companion object {
+        const val TAG = "PlaybackService"
         const val DUCKED_VOLUME = 0.18f
     }
 }

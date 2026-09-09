@@ -62,34 +62,37 @@ class GainProcessor : BaseAudioProcessor() {
         if (frames <= 0) return
 
         val channels = inputAudioFormat.channelCount
-        val output = replaceOutputBuffer(frames * inputAudioFormat.bytesPerFrame)
+        val bytes = frames * inputAudioFormat.bytesPerFrame
+        val output = replaceOutputBuffer(bytes)
         val wanted = target
+
+        // Unity, and already there: multiplying every sample by one is still multiplying every
+        // sample. A track with no measurement, or normalisation switched off, sits here for its
+        // whole length, so this is the path worth making free rather than merely cheap.
+        if (current == wanted && wanted == 1.0) {
+            copyThrough(inputBuffer, output, bytes)
+            inputBuffer.position(inputBuffer.limit())
+            output.flip()
+            return
+        }
 
         inputBuffer.order(ByteOrder.nativeOrder())
         output.order(ByteOrder.nativeOrder())
 
         if (inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT) {
             val input = inputBuffer.asFloatBuffer()
-            if (current == wanted && wanted == 1.0) {
-                while (input.hasRemaining()) output.putFloat(input.get())
-            } else {
-                repeat(frames) {
-                    val gain = advance(wanted)
-                    for (channel in 0 until channels) {
-                        output.putFloat(clampFloat(input.get() * gain))
-                    }
+            repeat(frames) {
+                val gain = advance(wanted)
+                for (channel in 0 until channels) {
+                    output.putFloat(clampFloat(input.get() * gain))
                 }
             }
         } else {
             val input = inputBuffer.asShortBuffer()
-            if (current == wanted && wanted == 1.0) {
-                while (input.hasRemaining()) output.putShort(input.get())
-            } else {
-                repeat(frames) {
-                    val gain = advance(wanted)
-                    for (channel in 0 until channels) {
-                        output.putShort(clamp(input.get() * gain))
-                    }
+            repeat(frames) {
+                val gain = advance(wanted)
+                for (channel in 0 until channels) {
+                    output.putShort(clamp(input.get() * gain))
                 }
             }
         }
