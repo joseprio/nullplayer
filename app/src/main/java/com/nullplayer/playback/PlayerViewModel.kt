@@ -61,6 +61,8 @@ private const val FAVORITES_MINIMUM = 0
 data class PlayerUiState(
     val isPlaying: Boolean = false,
     val isSpeaking: Boolean = false,
+    /** What the playing file turned out to be, once the decoder has been handed it. */
+    val audioProfile: AudioProfile? = null,
     val tracks: List<Track> = emptyList(),
     val groups: List<GroupSummary> = emptyList(),
     /** The tile whose contents are on screen, which need not be the one playing. Blank = vault. */
@@ -269,6 +271,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             if (command.customAction == VoiceCommands.SPEAKING_CHANGED) {
                 val speaking = args.getBoolean(VoiceCommands.EXTRA_SPEAKING)
                 _state.update { it.copy(isSpeaking = speaking) }
+            }
+            if (command.customAction == FormatCommands.PROFILE_CHANGED) {
+                // An empty bundle is the service saying it has nothing to report, which reads back
+                // as null and takes the line off the screen rather than leaving the last one up.
+                val profile = AudioProfile.fromBundle(args)
+                _state.update { it.copy(audioProfile = profile) }
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
@@ -1078,6 +1086,28 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun createGroup() {
         viewModelScope.launch { repository.createGroup() }
+    }
+
+    /**
+     * A new group with the tracks already in it.
+     *
+     * The two steps are one action here because of where it is reached from: the tag sheet, which
+     * is open precisely because there are tracks waiting to be filed. Making the group and then
+     * asking the user to tick it would be a ceremony with one possible outcome.
+     *
+     * It borrows [VaultRepository.createGroup] rather than naming and colouring a group of its
+     * own, so a group made from the sheet and a group made from the library's plus are the same
+     * kind of thing -- named by its cardinal, coloured a step further along the palette, and
+     * renamed by the same pencil when the default stops being good enough.
+     */
+    fun createGroupWith(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        viewModelScope.launch {
+            val group = repository.createGroup()
+            val ids = tracks.map { it.id }
+            repository.setTag(ids, group.id, true)
+            _state.update { it.copy(sharedGroupIds = repository.groupsSharedBy(ids)) }
+        }
     }
 
     fun updateGroup(id: String, name: String, colorArgb: Int) {

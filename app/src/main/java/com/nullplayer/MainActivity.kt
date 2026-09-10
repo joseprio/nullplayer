@@ -250,6 +250,7 @@ class MainActivity : FragmentActivity() {
                                 onOpenEqualizer = { screen = Screen.EQUALIZER },
                                 onReadSharedGroups = viewModel::readSharedGroups,
                                 onSetTag = viewModel::setTag,
+                                onCreateGroupWith = viewModel::createGroupWith,
                                 onSelectVault = viewModel::selectGroup,
                                 // Tapping a ribbon tile manages that tile. It reaches the same
                                 // named screen the dock does, so it passes the same prompt.
@@ -303,6 +304,7 @@ class MainActivity : FragmentActivity() {
                                 onDelete = viewModel::delete,
                                 onReadSharedGroups = viewModel::readSharedGroups,
                                 onSetTag = viewModel::setTag,
+                                onCreateGroupWith = viewModel::createGroupWith,
                                 onClose = {
                                     screen = if (tracksFromRibbon) Screen.PLAYER else Screen.LIBRARY
                                 },

@@ -12,9 +12,11 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
@@ -51,6 +53,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @UnstableApi
 class PlaybackService : MediaSessionService() {
@@ -59,6 +62,7 @@ class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
 
     private lateinit var repository: VaultRepository
+    private lateinit var vault: VaultFiles
     private lateinit var voiceOver: VoiceOver
     private lateinit var outputs: AudioOutputs
     private lateinit var settings: Settings
@@ -74,6 +78,11 @@ class PlaybackService : MediaSessionService() {
     /** The loudness read for the current track, cancelled if the track changes under it. */
     private var loudnessLookup: Job? = null
 
+    /** The format the renderer was last handed, and the job describing it to the UI. */
+    @Volatile
+    private var audioFormat: Format? = null
+    private var profileLookup: Job? = null
+
     /** The tile the queue is drawn from. Read from the audio thread's side of the session. */
     @Volatile
     private var sourceName: String = ""
@@ -82,6 +91,7 @@ class PlaybackService : MediaSessionService() {
         super.onCreate()
 
         repository = VaultRepository(this)
+        vault = VaultFiles(this)
         outputs = AudioOutputs(this)
         settings = Settings(this)
 
@@ -101,7 +111,7 @@ class PlaybackService : MediaSessionService() {
         val exoPlayer = ExoPlayer.Builder(this)
             .setRenderersFactory(EqualizedRenderers(this, equalizer, gain))
             .setMediaSourceFactory(
-                DefaultMediaSourceFactory(VaultDataSource.Factory(VaultFiles(this)))
+                DefaultMediaSourceFactory(VaultDataSource.Factory(vault))
             )
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -138,6 +148,7 @@ class PlaybackService : MediaSessionService() {
 
         exoPlayer.addListener(PlaybackTicket())
         exoPlayer.addAnalyticsListener(PlaybackDiagnostics())
+        exoPlayer.addAnalyticsListener(FormatWatcher())
         ContextCompat.registerReceiver(
             this,
             becomingNoisy,
@@ -349,6 +360,7 @@ class PlaybackService : MediaSessionService() {
             .apply {
                 VoiceCommands.ALL.forEach { add(SessionCommand(it, Bundle.EMPTY)) }
                 QueueCommands.ALL.forEach { add(SessionCommand(it, Bundle.EMPTY)) }
+                FormatCommands.ALL.forEach { add(SessionCommand(it, Bundle.EMPTY)) }
                 if (!speakable) {
                     remove(SessionCommand(VoiceCommands.SPEAK_TRACK, Bundle.EMPTY))
                     remove(SessionCommand(VoiceCommands.SPEAK_POSITION, Bundle.EMPTY))
@@ -452,6 +464,10 @@ class PlaybackService : MediaSessionService() {
         /** Every track brings its own level with it, so the gain is re-read on every change. */
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             applyLoudness(mediaItem?.mediaId)
+            // Also from here, not only from the renderer: two files encoded identically produce
+            // one format between them and so only one format change, but whether each of them
+            // varies its bitrate is a question about the file rather than about the format.
+            publishProfile()
         }
 
         /**
@@ -530,6 +546,68 @@ class PlaybackService : MediaSessionService() {
         ) {
             Log.w(TAG, "Audio sink error", audioSinkError)
         }
+    }
+
+    /** Notices what the renderer was handed, which is the only place the format is knowable. */
+    private inner class FormatWatcher : AnalyticsListener {
+        override fun onAudioInputFormatChanged(
+            eventTime: AnalyticsListener.EventTime,
+            format: Format,
+            decoderReuseEvaluation: androidx.media3.exoplayer.DecoderReuseEvaluation?,
+        ) {
+            audioFormat = format
+            publishProfile()
+        }
+    }
+
+    /**
+     * Tells every controller what is playing, in the sense of what kind of file it is.
+     *
+     * The bitrate question is answered off the audio thread because for an MP3 it means opening
+     * the file, and the answer is worth waiting a few milliseconds for -- the line appears a beat
+     * after the track starts rather than blocking anything to be exact from the first sample.
+     */
+    private fun publishProfile() {
+        profileLookup?.cancel()
+        val format = audioFormat
+        if (format == null) {
+            broadcastProfile(null)
+            return
+        }
+        val trackId = player?.currentMediaItem?.mediaId
+        profileLookup = scope.launch {
+            val variable = variableBitrate(format, trackId)
+            broadcastProfile(AudioProfile.of(format, variable))
+        }
+    }
+
+    /**
+     * Whether the bitrate varies, asked of whichever authority can answer for this format.
+     *
+     * Three different answers to one question, because the question is answered in three different
+     * places. An MP4 carries both an average and a peak and a gap between them is the file saying
+     * so itself. Vorbis and Opus have no constant mode worth the name. And an MP3 carries nothing
+     * at all above the bytes, so the bytes are read -- see [Mp3Vbr].
+     */
+    private suspend fun variableBitrate(format: Format, trackId: String?): Boolean =
+        when (format.sampleMimeType) {
+            MimeTypes.AUDIO_MPEG ->
+                trackId?.let { id ->
+                    withContext(Dispatchers.IO) { Mp3Vbr.isVariable(vault.fileFor(id)) }
+                } ?: false
+
+            MimeTypes.AUDIO_VORBIS, MimeTypes.AUDIO_OPUS -> true
+
+            else -> format.averageBitrate != Format.NO_VALUE &&
+                format.peakBitrate != Format.NO_VALUE &&
+                format.peakBitrate > format.averageBitrate
+        }
+
+    private fun broadcastProfile(profile: AudioProfile?) {
+        session?.broadcastCustomCommand(
+            SessionCommand(FormatCommands.PROFILE_CHANGED, Bundle.EMPTY),
+            profile?.toBundle() ?: Bundle.EMPTY,
+        )
     }
 
     /**

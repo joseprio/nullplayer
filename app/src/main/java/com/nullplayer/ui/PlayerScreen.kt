@@ -79,6 +79,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -186,6 +188,7 @@ fun PlayerScreen(
     onOpenSettings: () -> Unit,
     onReadSharedGroups: (List<Track>) -> Unit,
     onSetTag: (List<Track>, String, Boolean) -> Unit,
+    onCreateGroupWith: (List<Track>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var panel by remember { mutableStateOf(Panel.NONE) }
@@ -248,13 +251,23 @@ fun PlayerScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         if (state.hasTracks) {
-                            Hero(
-                                state = state,
-                                compact = true,
-                                onToggleFavorite = onToggleFavorite,
-                                onTag = { tagging = true },
-                            ) { goingToTrack = true }
-                            Spacer(Modifier.height(12.dp))
+                            // Weighted, so it is measured last and takes what is left rather than
+                            // what it wants. A column measures its children in order, and the
+                            // readout coming first meant it took its full height out of a column
+                            // that did not have it -- leaving the controls underneath a few pixels
+                            // to live in. The transport and the seeker survived that by drawing
+                            // outside their bounds; the seeker's digits, which clip to theirs,
+                            // simply vanished. The controls are the part that must not be squeezed,
+                            // so they are the part measured first.
+                            Box(Modifier.weight(1f, fill = false)) {
+                                Hero(
+                                    state = state,
+                                    compact = true,
+                                    onToggleFavorite = onToggleFavorite,
+                                    onTag = { tagging = true },
+                                ) { goingToTrack = true }
+                            }
+                            Spacer(Modifier.height(8.dp))
                         }
                         Controls(
                             state = state,
@@ -337,6 +350,7 @@ fun PlayerScreen(
             showing = tagging,
             onReadSharedGroups = onReadSharedGroups,
             onSetTag = onSetTag,
+            onCreateGroupWith = onCreateGroupWith,
             onDismiss = { tagging = false },
         )
 
@@ -565,7 +579,7 @@ private fun Hero(
                     tint = MUTED,
                 )
             }
-            Spacer(Modifier.height(if (compact) 6.dp else 10.dp))
+            Spacer(Modifier.height(if (compact) 3.dp else 10.dp))
             Text(
                 text = queuePosition(state),
                 color = TEXT,
@@ -574,7 +588,58 @@ private fun Hero(
                 fontFamily = FontFamily.Monospace,
                 letterSpacing = 1.sp,
             )
+            // Small print, and deliberately so: it is worth a glance when you wonder what you are
+            // listening to, and worth nothing at all the rest of the time. It arrives a beat after
+            // the track starts, so the space is not reserved -- there is no gap to hold open when
+            // there is nothing to put in it, and the readout above stays where it is either way.
+            state.audioProfile?.let { profile ->
+                Spacer(Modifier.height(if (compact) 1.dp else 6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = profile.summary,
+                        color = MUTED,
+                        fontSize = 8.sp,
+                        letterSpacing = 0.5.sp,
+                    )
+                    if (profile.isHiRes) {
+                        Spacer(Modifier.width(5.dp))
+                        HiResMark()
+                    }
+                }
+            }
         }
+    }
+}
+
+/**
+ * The Hi-Res Audio mark: two letters in a box, at the end of the line.
+ *
+ * Drawn rather than shipped as an icon because the official gold-and-black badge is a trademark
+ * with rules about its use, and this is a room where everything else is grey. It reads as what it
+ * is -- a small standards mark, in the same ink as the words it follows.
+ */
+@Composable
+private fun HiResMark() {
+    val shape = RoundedCornerShape(2.dp)
+    Box(
+        modifier = Modifier
+            .clip(shape)
+            .border(1.dp, MUTED, shape)
+            .padding(horizontal = 3.dp, vertical = 1.dp),
+    ) {
+        // The box is sized by the text, so the text has to stop lying about how tall it is. A
+        // glyph box carries padding above and below the letters for ascenders and descenders that
+        // "HR" does not have, and a border drawn around that reads as a tall empty rectangle with
+        // two small letters adrift inside it. Constraining the height instead only clips them.
+        Text(
+            text = "HR",
+            color = MUTED,
+            fontSize = 7.sp,
+            lineHeight = 8.sp,
+            fontWeight = FontWeight.SemiBold,
+            letterSpacing = 0.5.sp,
+            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false)),
+        )
     }
 }
 
@@ -592,6 +657,7 @@ private fun TagDialogFor(
     showing: Boolean,
     onReadSharedGroups: (List<Track>) -> Unit,
     onSetTag: (List<Track>, String, Boolean) -> Unit,
+    onCreateGroupWith: (List<Track>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val track = state.currentTrack
@@ -612,6 +678,7 @@ private fun TagDialogFor(
         state = state,
         tracks = listOf(track),
         onSetTag = { groupId, tagged -> onSetTag(listOf(track), groupId, tagged) },
+        onCreateGroup = { onCreateGroupWith(listOf(track)) },
         onDismiss = onDismiss,
     )
 }
@@ -738,8 +805,13 @@ private fun Controls(
             compact = compact,
         )
         if (state.settings.showSeeker) {
-            Spacer(Modifier.height(if (compact) 10.dp else 18.dp))
-            Progress(state = state, onSeek = onSeek, onToggleTimeMode = onToggleTimeMode)
+            Spacer(Modifier.height(if (compact) 5.dp else 18.dp))
+            Progress(
+                state = state,
+                onSeek = onSeek,
+                onToggleTimeMode = onToggleTimeMode,
+                compact = compact,
+            )
         }
     }
 }
@@ -981,17 +1053,22 @@ private fun Progress(
     state: PlayerUiState,
     onSeek: (Float) -> Unit,
     onToggleTimeMode: () -> Unit,
+    compact: Boolean = false,
 ) {
     var dragFraction by remember { mutableFloatStateOf(-1f) }
     val seekable = state.durationMs > 0
     val shown = if (dragFraction >= 0f) dragFraction else state.progress
     val busy = rememberBusy(state)
 
-    Column(Modifier.fillMaxWidth()) {
+    // The seeker is the tallest thing here that is mostly air: a 28dp band around a 2dp line, so
+    // that it can be dragged without precision. Landscape cannot afford all of it -- the whole
+    // column is shorter than the pieces want -- and a 22dp band is still a comfortable target.
+    val band = if (compact) 22.dp else 28.dp
+
+    val bar: @Composable (Modifier) -> Unit = { modifier ->
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(28.dp)
+            modifier = modifier
+                .height(band)
                 .pointerInput(seekable) {
                     if (!seekable) return@pointerInput
                     detectTapGestures { offset ->
@@ -1018,7 +1095,7 @@ private fun Progress(
             ProgressBar(
                 fraction = shown,
                 busy = busy,
-                modifier = Modifier.fillMaxWidth().height(28.dp),
+                modifier = Modifier.fillMaxWidth().height(band),
                 thumbRadius = when {
                     !seekable -> 0.dp
                     dragFraction >= 0f -> 9.dp
@@ -1026,35 +1103,82 @@ private fun Progress(
                 },
             )
         }
+    }
 
+    val elapsed: @Composable () -> Unit = {
+        Text(
+            text = clock((shown * state.durationMs).toLong()),
+            color = MUTED,
+            fontSize = if (compact) 10.sp else 12.sp,
+            lineHeight = if (compact) TIME_LINE_COMPACT else TIME_LINE,
+            fontFamily = FontFamily.Monospace,
+        )
+    }
+
+    // The padding is the touch target, and where it can grow depends on which way round this is.
+    // Stacked, it grows inward and downward, away from the two edges the label is pinned to.
+    // Beside the bar it can only grow vertically: any horizontal padding would be taken off the
+    // bar, which is the one thing in the row that wants every pixel it can get.
+    val remaining: @Composable () -> Unit = {
+        Text(
+            text = remainder(state, shown),
+            color = MUTED,
+            fontSize = if (compact) 10.sp else 12.sp,
+            lineHeight = if (compact) TIME_LINE_COMPACT else TIME_LINE,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier
+                .clickable(
+                    // No ripple and no shape: this is a line of text that answers a second
+                    // question when asked, not a button pretending to be one.
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onToggleTimeMode,
+                )
+                // Stacked under the bar, the target grows inward and downward, away from the two
+                // edges the label is pinned to. Beside the bar it grows nowhere: the row is only
+                // as tall as the band, and any horizontal padding would be taken off the bar.
+                .padding(
+                    start = if (compact) 0.dp else 24.dp,
+                    top = if (compact) 0.dp else 6.dp,
+                    bottom = if (compact) 0.dp else 6.dp,
+                ),
+        )
+    }
+
+    if (compact) {
+        // Beside the bar rather than under it. The row is then as tall as the band alone, so the
+        // digits cost nothing at all in a column that had nothing to spare -- which is the whole
+        // reason they were being clipped away before.
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = clock((shown * state.durationMs).toLong()),
-                color = MUTED,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = remainder(state, shown),
-                color = MUTED,
-                fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace,
-                modifier = Modifier
-                    .clickable(
-                        // No ripple and no shape: this is a line of text that answers a second
-                        // question when asked, not a button pretending to be one.
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onToggleTimeMode,
-                    )
-                    // The target grows inward and downward, away from the two edges the label is
-                    // pinned to, so it becomes worth hitting without the digits moving at all.
-                    .padding(start = 24.dp, top = 6.dp, bottom = 6.dp),
-            )
+            elapsed()
+            Spacer(Modifier.width(10.dp))
+            bar(Modifier.weight(1f))
+            Spacer(Modifier.width(10.dp))
+            remaining()
+        }
+    } else {
+        Column(Modifier.fillMaxWidth()) {
+            bar(Modifier.fillMaxWidth())
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                elapsed()
+                Spacer(Modifier.weight(1f))
+                remaining()
+            }
         }
     }
 }
+
+/**
+ * A tight line box for the seeker's digits.
+ *
+ * Left at its default, a 12sp line reserves around 25dp for ascenders and descenders that "0:00"
+ * does not have -- taller than the 22dp band the digits sit beside in landscape, so they overflowed
+ * their own bounds and the bottom of them was cut off by the edge of the column.
+ */
+private val TIME_LINE = 14.sp
+
+/** The same again for landscape, where the digits are a size smaller. */
+private val TIME_LINE_COMPACT = 12.sp
 
 /** How long a wait has to last before the bar starts saying so. */
 private const val BUSY_AFTER_MS = 350L
@@ -1212,7 +1336,7 @@ private fun Transport(
             contentDescription = if (state.isPlaying) "Pause" else "Play",
             onClick = onPlayPause,
             unavailable = refused,
-            size = if (compact) 66.dp else 78.dp,
+            size = if (compact) 56.dp else 78.dp,
             glyphFraction = 0.26f,
             tint = BACKGROUND,
             background = if (refused) PANEL else ACCENT,
@@ -1414,6 +1538,10 @@ private fun VolumePanel(
             text = "${Math.round(state.volumeFraction * 100)}%",
             color = MUTED,
             fontSize = 12.sp,
+            // A tight line box. The default leading makes a 12sp line about 25dp tall, which is
+            // taller than the 22dp band it sits beside -- so the digits overflowed their own
+            // bounds and the column's edge took the bottom off them.
+            lineHeight = 14.sp,
             fontFamily = FontFamily.Monospace,
         )
     }

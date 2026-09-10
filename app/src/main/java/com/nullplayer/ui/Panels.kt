@@ -326,6 +326,7 @@ internal fun TagDialog(
     state: PlayerUiState,
     tracks: List<Track>,
     onSetTag: (String, Boolean) -> Unit,
+    onCreateGroup: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -337,48 +338,80 @@ internal fun TagDialog(
             Text(if (tracks.size == 1) "Tag this track" else "Tag " + tracks.size + " tracks")
         },
         text = {
-            if (state.groups.isEmpty()) {
-                Text(
-                    text = "There are no groups yet. Make one in the library first.",
-                    color = MUTED,
-                    fontSize = 13.sp,
-                )
-            } else {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    state.groups.forEach { group ->
-                        val tagged = group.id in state.sharedGroupIds
-                        val groupColour = Color(group.colorArgb)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onSetTag(group.id, !tagged) }
-                                .padding(vertical = 10.dp, horizontal = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(Modifier.size(12.dp).clip(CircleShape).background(groupColour))
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                text = group.name,
-                                color = TEXT,
-                                fontSize = 15.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
-                            // The row owns the click, so the box itself is not separately
-                            // focusable — a tap anywhere on the line picks the group.
-                            Checkbox(
-                                checked = tagged,
-                                onCheckedChange = null,
-                                colors = CheckboxDefaults.colors(
-                                    checkedColor = groupColour,
-                                    checkmarkColor = readableOn(groupColour),
-                                    uncheckedColor = LINE,
-                                ),
-                            )
-                        }
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (state.groups.isEmpty()) {
+                    // It no longer sends anyone to the library to make one, because the line
+                    // underneath does it here. All that is left to say is that the list is empty.
+                    Text(
+                        text = "No groups yet.",
+                        color = MUTED,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 4.dp, horizontal = 4.dp),
+                    )
+                }
+                state.groups.forEach { group ->
+                    val tagged = group.id in state.sharedGroupIds
+                    val groupColour = Color(group.colorArgb)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onSetTag(group.id, !tagged) }
+                            .padding(vertical = 10.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(12.dp).clip(CircleShape).background(groupColour))
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = group.name,
+                            color = TEXT,
+                            fontSize = 15.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        // The row owns the click, so the box itself is not separately
+                        // focusable — a tap anywhere on the line picks the group.
+                        Checkbox(
+                            checked = tagged,
+                            onCheckedChange = null,
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = groupColour,
+                                checkmarkColor = readableOn(groupColour),
+                                uncheckedColor = LINE,
+                            ),
+                        )
                     }
+                }
+
+                // Last, under the groups, where a new one would appear anyway. Filing a track into
+                // a group that does not exist yet is a normal thing to want -- it is often the
+                // reason the sheet was opened -- and sending someone to the library to make it
+                // first loses both the selection and the thought.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onCreateGroup)
+                        .padding(vertical = 10.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // An outline where the groups have a filled dot: there is no colour to show
+                    // until the group exists and the palette has handed it one.
+                    Box(
+                        Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .border(1.dp, MUTED, CircleShape)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    // Just "New group": the title above has already said whether this is one
+                    // track or five, and saying it again cost more width than the dialog has.
+                    Text(
+                        text = "New group",
+                        color = ACCENT,
+                        fontSize = 15.sp,
+                    )
                 }
             }
         },

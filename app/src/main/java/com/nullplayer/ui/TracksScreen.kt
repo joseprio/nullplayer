@@ -84,6 +84,7 @@ fun TracksScreen(
     onDelete: (List<Track>) -> Unit,
     onReadSharedGroups: (List<Track>) -> Unit,
     onSetTag: (List<Track>, String, Boolean) -> Unit,
+    onCreateGroupWith: (List<Track>) -> Unit,
     onClose: () -> Unit,
     miniPlayer: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
@@ -267,6 +268,7 @@ fun TracksScreen(
             state = state,
             tracks = selected,
             onSetTag = { groupId, tagged -> onSetTag(selected, groupId, tagged) },
+            onCreateGroup = { onCreateGroupWith(selected) },
             onDismiss = { tagging = false },
         )
     }
