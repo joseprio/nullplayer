@@ -88,6 +88,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nullplayer.data.Group
@@ -527,14 +528,17 @@ private fun Hero(
             modifier = Modifier
                 .clip(RoundedCornerShape(16.dp))
                 .clickable(onClickLabel = "Go to a track", onClick = onClick)
-                .padding(horizontal = 28.dp, vertical = 6.dp),
+                .padding(horizontal = 28.dp, vertical = if (compact) 2.dp else 6.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // Its own target inside the readout's: a press on the heart marks the track, a
                 // press anywhere else on the readout still asks which track to go to.
                 Box(
                     modifier = Modifier
-                        .size(30.dp)
+                        // The word is 11sp; what makes this row 30dp tall is the pair of round
+                        // targets around it, and landscape can spare four of those dp more easily
+                        // than it can spare the seeker underneath.
+                        .size(if (compact) 26.dp else 30.dp)
                         .clip(CircleShape)
                         .clickable(
                             onClickLabel = if (state.currentIsFavorite) {
@@ -574,7 +578,7 @@ private fun Hero(
                     glyph = TagGlyph,
                     contentDescription = "Choose groups for this track",
                     onClick = onTag,
-                    size = 30.dp,
+                    size = if (compact) 26.dp else 30.dp,
                     glyphFraction = 0.34f,
                     tint = MUTED,
                 )
@@ -584,6 +588,10 @@ private fun Hero(
                 text = queuePosition(state),
                 color = TEXT,
                 fontSize = if (compact) 34.sp else 46.sp,
+                // Digits and a slash, and nothing that descends below the baseline -- so the
+                // leading a line box reserves by default is height held for characters this text
+                // cannot contain. Portrait can afford to leave it; landscape cannot.
+                lineHeight = if (compact) 36.sp else TextUnit.Unspecified,
                 fontWeight = FontWeight.Light,
                 fontFamily = FontFamily.Monospace,
                 letterSpacing = 1.sp,
@@ -599,6 +607,7 @@ private fun Hero(
                         text = profile.summary,
                         color = MUTED,
                         fontSize = 8.sp,
+                        lineHeight = if (compact) 9.sp else TextUnit.Unspecified,
                         letterSpacing = 0.5.sp,
                     )
                     if (profile.isHiRes) {
