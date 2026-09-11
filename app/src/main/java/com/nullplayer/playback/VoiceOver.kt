@@ -4,9 +4,33 @@ import android.content.Context
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import com.nullplayer.data.AppSettings
 import com.nullplayer.data.Track
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * The parts of a track an announcement can name, in the order it names them.
+ *
+ * A part the user has switched off is not said at all rather than said differently: the line is
+ * spoken over the music and read once, so the way to shorten it is to have less in it. The order
+ * is the enum's own, so turning the middle of the line off closes the gap rather than leaving one.
+ */
+enum class VoicePart {
+    TITLE,
+    ARTIST,
+    ALBUM,
+    YEAR,
+}
+
+/** The four stored switches as the set [VoiceOver.describe] reads. */
+val AppSettings.voiceParts: Set<VoicePart>
+    get() = buildSet {
+        if (speakTitle) add(VoicePart.TITLE)
+        if (speakArtist) add(VoicePart.ARTIST)
+        if (speakAlbum) add(VoicePart.ALBUM)
+        if (speakYear) add(VoicePart.YEAR)
+    }
 
 /**
  * The only channel through which a track ever identifies itself.
@@ -124,15 +148,27 @@ class VoiceOver(
         /** Read back when a voice is picked, so the choice can be judged by ear. */
         const val VOICE_SAMPLE = "This is the voice that will read your tracks."
 
-        /** "Blue Monday. By New Order. From Power, Corruption and Lies." */
-        fun describe(track: Track?): String {
+        /** What an announcement says when nothing has been switched off. */
+        private val ALL_PARTS = VoicePart.entries.toSet()
+
+        /**
+         * "Blue Monday. By New Order. From Power, Corruption and Lies."
+         *
+         * [parts] is what the user has left switched on. A part that is on but has no tag behind
+         * it is still skipped, so a file with no album never leaves a gap where one would be.
+         */
+        fun describe(track: Track?, parts: Set<VoicePart> = ALL_PARTS): String {
             if (track == null) return "No song loaded."
-            return buildList {
-                add(track.title ?: "Untitled track")
-                track.artist?.let { add("by $it") }
-                track.album?.let { add("from $it") }
-                track.year?.let { add(it) }
-            }.joinToString(". ") + "."
+            val said = buildList {
+                if (VoicePart.TITLE in parts) add(track.title ?: "Untitled track")
+                if (VoicePart.ARTIST in parts) track.artist?.let { add("by $it") }
+                if (VoicePart.ALBUM in parts) track.album?.let { add("from $it") }
+                if (VoicePart.YEAR in parts) track.year?.let { add(it) }
+            }
+            // Everything switched off, or switched off down to tags this file does not carry.
+            // Saying so is better than a button that answers with silence.
+            if (said.isEmpty()) return "Nothing to announce."
+            return said.joinToString(". ") + "."
         }
 
         /** "Track 4 of 96. 3 minutes 21 seconds." */

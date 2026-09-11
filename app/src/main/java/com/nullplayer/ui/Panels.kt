@@ -249,13 +249,21 @@ internal fun ChoiceRow(
             if (subtitle != null) Text(subtitle, color = MUTED, fontSize = 12.sp)
         }
         Spacer(Modifier.width(12.dp))
+        // An unselected ring used to be a hairline of [LINE] — the colour rows are divided with —
+        // over a disc of [BACKGROUND]. On a panel that came to about 1.2:1 against what it sat on,
+        // which is to say invisible: the one control on the screen whose entire job is to show you
+        // which option you are on could only be found by knowing where to look. [MUTED] at two dp
+        // is 5.5:1, and the same weight the platform's own radio is drawn at.
+        //
+        // Transparent rather than filled, too. These sit on dialogs and inline panels as often as
+        // on the page, and a disc of the page colour punched a darker hole in both.
         Column(
             modifier = Modifier
-                .size(18.dp)
+                .size(20.dp)
                 .clip(CircleShape)
-                .background(if (selected) ACCENT else BACKGROUND)
-                .border(1.dp, if (selected) ACCENT else LINE, CircleShape)
-                .padding(5.dp)
+                .background(if (selected) ACCENT else Color.Transparent)
+                .border(2.dp, if (selected) ACCENT else MUTED, CircleShape)
+                .padding(6.dp)
                 .clip(CircleShape)
                 .background(if (selected) Color.White else Color.Transparent),
         ) {}

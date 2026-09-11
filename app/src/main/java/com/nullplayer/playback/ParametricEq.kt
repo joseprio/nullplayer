@@ -73,14 +73,17 @@ object AutoEqParser {
     // its line breaks eaten — pasted out of a PDF, a chat client, or a wrapped forum post — is
     // still perfectly readable, and refusing it over lost whitespace would be the parser being
     // fussy about presentation rather than content.
+    // The unit is optional in both. Every tool that writes these files writes "dB", but people
+    // type them by hand as well, and a number with its unit left off is not ambiguous -- there is
+    // no other unit a preamp or a gain could be in.
     private val PREAMP = Regex(
-        """preamp\s*:\s*(-?[\d.]+)\s*db""",
+        """preamp\s*:\s*(-?[\d.]+)\s*(?:db)?""",
         RegexOption.IGNORE_CASE,
     )
 
     private val FILTER = Regex(
         """filter\s*\d*\s*:\s*(on|off)\s+(\w+)\s+fc\s+(-?[\d.]+)\s*hz""" +
-            """(?:\s+gain\s+(-?[\d.]+)\s*db)?""" +
+            """(?:\s+gain\s+(-?[\d.]+)\s*(?:db)?)?""" +
             """(?:\s+q\s+(-?[\d.]+))?""",
         RegexOption.IGNORE_CASE,
     )

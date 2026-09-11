@@ -24,7 +24,10 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.nullplayer.R
 import com.nullplayer.data.AppSettings
 import com.nullplayer.data.Settings
+import com.nullplayer.data.TileModes
 import com.nullplayer.data.Track
+import com.nullplayer.data.TrackOrder
+import com.nullplayer.data.ordered
 import com.nullplayer.data.Group
 import com.nullplayer.data.GroupSummary
 import com.nullplayer.data.VaultFiles
@@ -42,6 +45,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -210,8 +214,14 @@ data class PlayerUiState(
             !outputSatisfied -> "Connect $requiredOutputLabel for VoiceOver."
             else -> null
         }
-    val shuffle: Boolean get() = settings.shuffle
-    val repeat: RepeatMode get() = RepeatMode.ofOrdinal(settings.repeatOrdinal)
+    /** The buttons answer for the tile the ribbon is on, which is the queue they would change. */
+    val modes: TileModes get() = settings.modesFor(activeGroupId)
+    val shuffle: Boolean get() = modes.shuffle
+    val repeat: RepeatMode get() = RepeatMode.ofOrdinal(modes.repeatOrdinal)
+
+    /** How the queue on screen is laid out, and whether it runs backwards. */
+    val order: TrackOrder get() = modes.order
+    val orderReversed: Boolean get() = modes.reversed
 
     /** How far through the track, 0..1. Zero while the duration is still unknown. */
     val progress: Float
@@ -247,6 +257,15 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     /** The tile the live queue was built from, so a switch can be told from an edit to one list. */
     private var queuedGroupId: String? = null
+
+    /**
+     * Where the last session had got to, spent on the first queue this one builds.
+     *
+     * Held here rather than read at the point of use because it is only ever true once: the moment
+     * a queue exists, the player itself is the authority on where it is, and a stored position
+     * from before would be an older answer to a question already settled.
+     */
+    private var pendingResume: ResumePoint? = null
 
     /**
      * Whether the app is actually on screen, as told by the Activity's own start and stop.
@@ -320,32 +339,72 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             // Only the selected tile is loaded. Switching tiles is a different queue, not a filter
             // over one big one, which is what keeps shuffle and "track 4 of 96" honest.
+            //
+            // Nothing is queued until the settings have been read once. Which tile is selected is
+            // itself a stored setting, so building a queue before they land means building the
+            // wrong one and correcting it — and the correction is a race the resume point loses:
+            // the first queue would be handed to the player before there was anything to resume
+            // into it.
+            //
+            // The tile's order travels with its id, so re-ordering rebuilds the queue exactly the
+            // way switching tiles does. It is emphatically not a switch, though: the same tracks
+            // are still in it, so the one playing keeps playing, from where it had got to, at
+            // whatever number it now sits at. See [syncQueue].
             _state
-                .map { it.activeGroupId }
+                .filter { it.settingsLoaded }
+                .map { Ordering(it.activeGroupId, it.order, it.orderReversed) }
                 .distinctUntilChanged()
-                .flatMapLatest { groupId ->
-                    repository.observeTracks(groupId).map { groupId to it }
+                .flatMapLatest { ordering ->
+                    repository.observeTracks(ordering.groupId).map { ordering to it }
                 }
-                .collect { (groupId, tracks) ->
+                .collect { (ordering, listed) ->
+                    val tracks = listed.ordered(ordering.order, ordering.reversed)
                     // The very first list is not a switch — nothing was playing to carry over.
-                    val switched = queuedGroupId != null && groupId != queuedGroupId
-                    queuedGroupId = groupId
+                    val switched = queuedGroupId != null && ordering.groupId != queuedGroupId
+                    queuedGroupId = ordering.groupId
                     _state.update { it.copy(tracks = tracks) }
                     syncQueue(tracks, switched)
                 }
         }
         viewModelScope.launch {
+            // Laid out the same way the queue would be, so the dock lists a group in the order it
+            // plays it. A list that disagreed with the queue drawn from it would make "track 41"
+            // mean two different things on two screens.
             _state
-                .map { it.browseGroupId }
+                .map { state ->
+                    val modes = state.settings.modesFor(state.browseGroupId)
+                    Ordering(state.browseGroupId, modes.order, modes.reversed)
+                }
                 .distinctUntilChanged()
-                .flatMapLatest { groupId -> repository.observeTracks(groupId) }
+                .flatMapLatest { ordering ->
+                    repository.observeTracks(ordering.groupId).map { tracks ->
+                        tracks.ordered(ordering.order, ordering.reversed)
+                    }
+                }
                 .collect { tracks -> _state.update { it.copy(browseTracks = tracks) } }
+        }
+        viewModelScope.launch {
+            // Shuffle and repeat belong to the tile, so moving the ribbon moves them too. Watched
+            // rather than applied at the point of switching, because a tile's modes can also
+            // change from the library screen, where no queue is being touched at all.
+            _state
+                .map { it.modes }
+                .distinctUntilChanged()
+                .collect { modes ->
+                    controller?.shuffleModeEnabled = modes.shuffle
+                    controller?.repeatMode = RepeatMode.ofOrdinal(modes.repeatOrdinal).playerValue
+                }
         }
         viewModelScope.launch {
             webServer.state.collect { web -> _state.update { it.copy(web = web) } }
         }
         viewModelScope.launch {
             settings.all.collect { config ->
+                // Only from the first snapshot: every later one is this session's own writing,
+                // and taking a resume point from it would be reading back what is already playing.
+                if (!_state.value.settingsLoaded && config.lastTrackId.isNotEmpty()) {
+                    pendingResume = ResumePoint(config.lastTrackId, config.lastPositionMs)
+                }
                 _state.update { it.copy(settings = config, settingsLoaded = true) }
             }
         }
@@ -460,7 +519,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         future.addListener({
             controller = future.get().apply {
                 addListener(playerListener)
-                shuffleModeEnabled = _state.value.settings.shuffle
+                shuffleModeEnabled = _state.value.shuffle
                 repeatMode = _state.value.repeat.playerValue
             }
             readPlayback()
@@ -503,9 +562,24 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         if (!switched && playingId != null && patchQueue(player, existing, wanted, items)) return
 
         val carriedOver = tracks.indexOfFirst { it.id == playingId }
+
+        // Picking up where the last session stopped, which is only ever the first queue built
+        // into a player holding nothing: a service that outlived the Activity already has both
+        // the queue and the position, and this would wind it back. Spent whether or not it lands,
+        // so a track deleted between sessions costs the resume rather than lying in wait for some
+        // later queue that happens to contain it.
+        val resuming = pendingResume
+            ?.takeIf { existing.isEmpty() }
+            ?.let { point ->
+                val index = tracks.indexOfFirst { it.id == point.trackId }
+                if (index >= 0) index to point.positionMs else null
+            }
+        if (existing.isEmpty()) pendingResume = null
+
         val start = when {
             // The track came along with the switch, so it keeps its place and its position.
             carriedOver >= 0 -> carriedOver
+            resuming != null -> resuming.first
             items.isEmpty() || !switched -> null
             // Shuffle is honoured here rather than left to the player: the player's shuffle order
             // decides what comes *next*, not where a queue it has only just been handed begins.
@@ -513,10 +587,16 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             else -> 0
         }
 
+        val startPosition = when {
+            carriedOver >= 0 -> resumePosition
+            resuming != null -> resuming.second
+            else -> 0L
+        }
+
         if (start == null) {
             player.setMediaItems(items)
         } else {
-            player.setMediaItems(items, start, if (carriedOver >= 0) resumePosition else 0L)
+            player.setMediaItems(items, start, startPosition)
         }
         player.prepare()
         // Playing carries across a switch whenever there is anything to play. A tile that happens
@@ -748,9 +828,12 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     // -- Modes ------------------------------------------------------------------------------
 
     fun toggleShuffle() {
-        val next = !_state.value.settings.shuffle
+        val current = _state.value
+        val next = !current.shuffle
         controller?.shuffleModeEnabled = next
-        viewModelScope.launch { settings.setShuffle(next) }
+        viewModelScope.launch {
+            settings.setTileModes(current.activeGroupId, current.modes.copy(shuffle = next))
+        }
     }
 
     /** Swaps the seeker's right-hand label between time left and track length. */
@@ -759,10 +842,32 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { settings.setShowRemainingTime(next) }
     }
 
+    /**
+     * How the tile on the ribbon lays its tracks out, and which way round.
+     *
+     * Both in one call because the dialog asks both questions at once, and writing them separately
+     * would rebuild the queue twice for one answer.
+     */
+    fun setActiveOrder(order: TrackOrder, reversed: Boolean) {
+        val current = _state.value
+        viewModelScope.launch {
+            settings.setTileModes(
+                current.activeGroupId,
+                current.modes.copy(orderOrdinal = order.ordinal, reversed = reversed),
+            )
+        }
+    }
+
     fun cycleRepeat() {
-        val next = _state.value.repeat.next()
+        val current = _state.value
+        val next = current.repeat.next()
         controller?.repeatMode = next.playerValue
-        viewModelScope.launch { settings.setRepeatOrdinal(next.ordinal) }
+        viewModelScope.launch {
+            settings.setTileModes(
+                current.activeGroupId,
+                current.modes.copy(repeatOrdinal = next.ordinal),
+            )
+        }
     }
 
     // -- Volume -----------------------------------------------------------------------------
@@ -913,6 +1018,23 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun setNormalizeVolume(normalize: Boolean) {
         viewModelScope.launch { settings.setNormalizeVolume(normalize) }
     }
+
+    /** A track and how far into it, as read back from the preferences at startup. */
+    private data class ResumePoint(val trackId: String, val positionMs: Long)
+
+    /**
+     * A list to load, and the shape to load it in.
+     *
+     * One value rather than three, because it is what the flows above are made distinct by: any
+     * of the three changing is a different list of tracks, and none of them changing is the same
+     * one. Comparing them separately would either reload on every unrelated state update or miss
+     * a re-ordering of the tile already loaded.
+     */
+    private data class Ordering(
+        val groupId: String,
+        val order: TrackOrder,
+        val reversed: Boolean,
+    )
 
     // -- The ticker -------------------------------------------------------------------------
 
@@ -1120,6 +1242,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     fun deleteGroup(id: String) {
         viewModelScope.launch {
             repository.deleteGroup(id)
+            settings.clearTileModes(id)
             if (_state.value.browseGroupId == id) {
                 _state.update { it.copy(browseGroupId = Group.VAULT_ID) }
             }
@@ -1143,6 +1266,11 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** Set from the group's own dialog, for a tile that need not be the one playing. */
+    fun setGroupModes(groupId: String, modes: TileModes) {
+        viewModelScope.launch { settings.setTileModes(groupId, modes) }
+    }
+
     fun setShowSeeker(show: Boolean) {
         viewModelScope.launch { settings.setShowSeeker(show) }
     }
@@ -1153,6 +1281,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setVoice(name: String) {
         viewModelScope.launch { settings.setVoiceName(name) }
+    }
+
+    /** One switch per part of the announcement — see [VoicePart]. */
+    fun setVoicePart(part: VoicePart, speak: Boolean) {
+        viewModelScope.launch {
+            when (part) {
+                VoicePart.TITLE -> settings.setSpeakTitle(speak)
+                VoicePart.ARTIST -> settings.setSpeakArtist(speak)
+                VoicePart.ALBUM -> settings.setSpeakAlbum(speak)
+                VoicePart.YEAR -> settings.setSpeakYear(speak)
+            }
+        }
     }
 
     fun markNotificationsAsked() {

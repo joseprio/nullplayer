@@ -38,6 +38,12 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+    testOptions {
+        // The tests here are for the arithmetic and the parsing -- the parts that have no business
+        // touching the framework. This keeps an accidental android.* call from throwing a stub
+        // exception halfway through and reporting itself as a failed assertion.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 ksp {
@@ -76,4 +82,6 @@ dependencies {
     ksp(libs.room.compiler)
 
     debugImplementation(libs.androidx.ui.tooling)
+
+    testImplementation(libs.junit)
 }

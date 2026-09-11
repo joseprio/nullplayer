@@ -45,7 +45,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nullplayer.data.Group
 import com.nullplayer.data.GroupSummary
+import com.nullplayer.data.TileModes
 import com.nullplayer.playback.PlayerUiState
+import com.nullplayer.playback.RepeatMode
 
 /**
  * The vault, and the groups filed out of it.
@@ -60,6 +62,7 @@ fun LibraryScreen(
     onOpenGroup: (String) -> Unit,
     onCreateGroup: () -> Unit,
     onUpdateGroup: (String, String, Int) -> Unit,
+    onGroupModes: (String, TileModes) -> Unit,
     onDeleteGroup: (String) -> Unit,
     onClose: () -> Unit,
     miniPlayer: @Composable (Modifier) -> Unit,
@@ -137,8 +140,10 @@ fun LibraryScreen(
     editingGroup?.let { existing ->
         EditGroupDialog(
             group = existing,
-            onSave = { name, colour ->
+            modes = state.settings.modesFor(existing.id),
+            onSave = { name, colour, modes ->
                 onUpdateGroup(existing.id, name, colour)
+                onGroupModes(existing.id, modes)
                 editingGroup = null
             },
             onDelete = {
@@ -212,7 +217,11 @@ private fun LibraryRow(
 }
 
 /**
- * Renaming a group and recolouring it.
+ * Renaming a group, recolouring it, and saying how it plays.
+ *
+ * Shuffle and repeat are here as well as on the player because they belong to the tile rather than
+ * to the app: the player's buttons answer for whatever the ribbon is on, and this is the one place
+ * a group can be told how to play without first going and playing it.
  *
  * There is no create counterpart: a new group is made straight from the + button, named by its
  * cardinal, and anyone who wants something else comes back here. Deleting is unguarded, because a
@@ -221,12 +230,15 @@ private fun LibraryRow(
 @Composable
 private fun EditGroupDialog(
     group: GroupSummary,
-    onSave: (String, Int) -> Unit,
+    modes: TileModes,
+    onSave: (String, Int, TileModes) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf(group.name) }
     var colour by remember { mutableIntStateOf(group.colorArgb) }
+    var shuffle by remember { mutableStateOf(modes.shuffle) }
+    var repeat by remember { mutableStateOf(RepeatMode.ofOrdinal(modes.repeatOrdinal)) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -252,6 +264,30 @@ private fun EditGroupDialog(
                 )
                 Spacer(Modifier.height(16.dp))
                 ColorPicker(color = colour, onColor = { colour = it })
+
+                Spacer(Modifier.height(18.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Shuffle", color = TEXT, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                    NullSwitch(checked = shuffle, onCheckedChange = { shuffle = it })
+                }
+
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    text = "REPEAT",
+                    color = MUTED,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.4.sp,
+                    modifier = Modifier.padding(bottom = 2.dp),
+                )
+                RepeatMode.entries.forEach { mode ->
+                    ChoiceRow(
+                        title = repeatLabel(mode),
+                        selected = repeat == mode,
+                        onSelect = { repeat = mode },
+                    )
+                }
+
                 Spacer(Modifier.height(18.dp))
                 Text(
                     text = "Delete this group",
@@ -271,7 +307,15 @@ private fun EditGroupDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSave(name, colour) }, enabled = name.isNotBlank()) {
+            TextButton(
+                // Copied from what the tile already has rather than built fresh, so the order
+                // it is laid out in — which this dialog does not ask about — survives a rename.
+                onClick = {
+                    val edited = modes.copy(shuffle = shuffle, repeatOrdinal = repeat.ordinal)
+                    onSave(name, colour, edited)
+                },
+                enabled = name.isNotBlank(),
+            ) {
                 Text("Save", color = if (name.isNotBlank()) ACCENT else MUTED)
             }
         },
@@ -279,6 +323,18 @@ private fun EditGroupDialog(
             TextButton(onClick = onDismiss) { Text("Cancel", color = MUTED) }
         },
     )
+}
+
+/**
+ * The repeat modes as the dialog names them.
+ *
+ * "The whole group" rather than the player's wordless icon, because a dialog has the room and a
+ * user reading it is deciding rather than glancing.
+ */
+private fun repeatLabel(mode: RepeatMode): String = when (mode) {
+    RepeatMode.OFF -> "Off"
+    RepeatMode.ALL -> "The whole group"
+    RepeatMode.ONE -> "This track"
 }
 
 /** A small text action, for the corners of section headers. */

@@ -239,6 +239,7 @@ class MainActivity : FragmentActivity() {
                                 onToggleTimeMode = viewModel::toggleTimeMode,
                                 onToggleFavorite = viewModel::toggleFavorite,
                                 onGoToTrack = viewModel::goToTrack,
+                                onSetOrder = viewModel::setActiveOrder,
                                 onVoiceOver = viewModel::announceCurrentTrack,
                                 onVoiceOverLong = viewModel::announceQueuePosition,
                                 onToggleShuffle = viewModel::toggleShuffle,
@@ -286,6 +287,7 @@ class MainActivity : FragmentActivity() {
                                 // in the list you are already looking at, ready to be renamed.
                                 onCreateGroup = viewModel::createGroup,
                                 onUpdateGroup = viewModel::updateGroup,
+                                onGroupModes = viewModel::setGroupModes,
                                 onDeleteGroup = viewModel::deleteGroup,
                                 onClose = { screen = Screen.PLAYER },
                                 miniPlayer = miniPlayer,
@@ -320,6 +322,7 @@ class MainActivity : FragmentActivity() {
                                 onShowSeeker = viewModel::setShowSeeker,
                                 onShowVaultCounts = viewModel::setShowVaultCounts,
                                 onVoice = viewModel::setVoice,
+                                onVoicePart = viewModel::setVoicePart,
                                 onRequireOutputDevice = viewModel::setRequireOutputDevice,
                                 onRequiredDevice = viewModel::setRequiredDevice,
                                 onPreferredDevice = viewModel::setPreferredDevice,

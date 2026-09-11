@@ -32,7 +32,10 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.PI
+import kotlin.math.cos
 import kotlin.math.min
+import kotlin.math.sin
 
 /**
  * The icon set, drawn rather than imported.
@@ -359,49 +362,169 @@ private fun DrawScope.drawSoundWaves(
     }
 }
 
-/** Three faders at three different settings. */
+/**
+ * Three faders at three different settings, each knob a ring threaded onto its shaft.
+ *
+ * The shaft is drawn as two lines with the knob between them rather than one line with the knob
+ * on top, so the hole in the ring is a real hole — the page shows through it, over glass or over
+ * the flat background alike, where a disc of the page colour would show its seam on one of the
+ * two. The two halves stop at the ring's outer edge and their round caps reach exactly its inner
+ * one, which is what makes the three marks read as one fader rather than as a bar and a circle.
+ */
 val EqualizerGlyph: Glyph = { extent, color ->
     val stroke = extent * 0.15f
-    val positions = listOf(-extent * 0.66f, 0f, extent * 0.66f)
-    val knobs = listOf(-extent * 0.32f, extent * 0.36f, -extent * 0.04f)
+    val radius = extent * 0.24f
+    val top = -extent * 0.92f
+    val bottom = extent * 0.92f
+    // Outer pair low, middle one high: the same asymmetry the old three-bar mark had, which is
+    // what says "set by hand" rather than "reset".
+    val faders = listOf(
+        -extent * 0.7f to extent * 0.26f,
+        0f to -extent * 0.26f,
+        extent * 0.7f to extent * 0.26f,
+    )
 
-    positions.forEachIndexed { index, x ->
+    faders.forEach { (x, knob) ->
         drawLine(
-            color = color.copy(alpha = 0.55f),
-            start = Offset(x, -extent),
-            end = Offset(x, extent),
+            color = color,
+            start = Offset(x, top),
+            end = Offset(x, knob - radius),
             strokeWidth = stroke,
             cap = StrokeCap.Round,
         )
-        // Kept narrower than the gap between faders so three knobs never merge into a bar.
         drawLine(
             color = color,
-            start = Offset(x - extent * 0.26f, knobs[index]),
-            end = Offset(x + extent * 0.26f, knobs[index]),
-            strokeWidth = stroke * 1.6f,
+            start = Offset(x, knob + radius),
+            end = Offset(x, bottom),
+            strokeWidth = stroke,
             cap = StrokeCap.Round,
+        )
+        drawCircle(color, radius, Offset(x, knob), style = Stroke(width = stroke))
+    }
+}
+
+/**
+ * A cogwheel: eight teeth on a solid body, with the hub punched out.
+ *
+ * One path rather than a ring with eight bars laid on top of it. The bars version had to leave a
+ * gap between each tooth and the ring or the joins showed as seams, which is what made it read as
+ * a spoked wheel rather than a cog — and it could not have a hub at all, because a hole in the
+ * middle of a stroked ring is just the ring.
+ *
+ * Every number below is lifted from the drawing this is a copy of, rather than chosen: a cog is a
+ * shape everyone has seen ten thousand times, and proportions that are merely close read as wrong
+ * without the reader being able to say why. Corners are left sharp for the same reason.
+ *
+ * The hub is a second subpath under an even-odd fill, so it is a real hole: the page shows through
+ * it over the glass and over the flat background alike, where a disc in the background colour
+ * would show its seam on one of the two.
+ */
+val SettingsGlyph: Glyph = { extent, color ->
+    val root = extent * 0.806f
+    val hub = extent * 0.383f
+    // Each tooth covers close to sixteen degrees of the root circle and a little over ten of the
+    // rim, so its flanks lean in as they climb. That taper is what makes the mark a cog: teeth
+    // with parallel sides read as an asterisk with the corners filled in.
+    val rootHalf = 15.9f
+    val valley = 45f - 2f * rootHalf
+    val tipHalf = extent * 0.183f
+
+    fun turned(x: Float, y: Float, degrees: Float): Offset {
+        val a = degrees * (PI.toFloat() / 180f)
+        return Offset(x * cos(a) - y * sin(a), x * sin(a) + y * cos(a))
+    }
+
+    val rootCircle = Rect(Offset.Zero, root)
+    val cog = Path().apply {
+        fillType = PathFillType.EvenOdd
+        val start = turned(root, 0f, -rootHalf)
+        moveTo(start.x, start.y)
+        repeat(8) { index ->
+            val centre = index * 45f
+            // The tip is a flat face standing off the middle at the full extent — so it is the
+            // faces, not the corners, that set how big the mark is, and the corners sit a shade
+            // further out than the face they belong to.
+            val lead = turned(extent, -tipHalf, centre)
+            val trail = turned(extent, tipHalf, centre)
+            lineTo(lead.x, lead.y)
+            lineTo(trail.x, trail.y)
+            // Round the valley to the foot of the next tooth. The arc starts exactly where the
+            // flank above ended, so it joins on without a seam and leaves the pen in the right
+            // place for the next one.
+            arcTo(rootCircle, centre + rootHalf, valley, false)
+        }
+        close()
+        addOval(Rect(Offset.Zero, hub))
+    }
+    drawPath(cog, color)
+}
+
+/** Books on a shelf: the library, which is the only place a list of anything exists. */
+val LibraryGlyph: Glyph = { extent, color -> drawShelf(extent, color) }
+
+/**
+ * Three spines, the last one leaning on the others.
+ *
+ * Drawn as solids rather than outlines because a spine at this size has no room for a stroke and
+ * a gap both — outlined, the three of them read as a fence. The leaning one is what makes the
+ * mark a shelf instead of three bars: upright it would be indistinguishable from a level meter,
+ * and the app already has one of those in [PlayingGlyph].
+ */
+private fun DrawScope.drawShelf(extent: Float, color: Color) {
+    val width = extent * 0.39f
+    val top = -extent * 0.88f
+    val height = extent * 1.77f
+    val radius = CornerRadius(width * 0.44f)
+
+    listOf(-extent * 0.88f, -extent * 0.4f).forEach { left ->
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(left, top),
+            size = Size(width, height),
+            cornerRadius = radius,
+        )
+    }
+    // Tipped about its own middle, so it keeps the height of the two it is resting against
+    // instead of sliding out of the box at the foot.
+    val leaning = extent * 0.3f
+    rotate(degrees = -13.5f, pivot = Offset(leaning + width / 2f, top + height / 2f)) {
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(leaning, top),
+            size = Size(width, height),
+            cornerRadius = radius,
         )
     }
 }
 
-/** A cogwheel: a thick ring with eight teeth around it. */
-val SettingsGlyph: Glyph = { extent, color ->
-    val ring = extent * 0.5f
-    drawCircle(color, ring, Offset.Zero, style = Stroke(width = extent * 0.34f))
-    repeat(8) { index ->
-        rotate(degrees = index * 45f, pivot = Offset.Zero) {
-            drawRoundRect(
-                color = color,
-                topLeft = Offset(-extent * 0.13f, -extent * 1.0f),
-                size = Size(extent * 0.26f, extent * 0.44f),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(extent * 0.08f),
-            )
-        }
-    }
-}
+/**
+ * How far [drawListLines] reaches above and below its middle, per unit of the extent it is given.
+ *
+ * 0.62 out to the outer bar, plus the 0.11 its round cap adds on top of that. Stated rather than
+ * measured by eye, because both badges are aligned against it: the arrow is drawn to it and the
+ * play mark stands on it, so a wrong number here is two marks quietly out of true rather than one
+ * obvious mistake.
+ */
+private const val LIST_HALF_HEIGHT = 0.73f
 
-/** Stacked bars: the library, which is the only place a list of anything exists. */
-val LibraryGlyph: Glyph = { extent, color ->
+/**
+ * How big the list is drawn inside the two marks that badge it.
+ *
+ * One number for both, because the two buttons stand either side of the same readout: a list drawn
+ * to two scales would make them two different marks at a glance, whatever the badge on each said.
+ * It is also what makes them the same height, since each is exactly as tall as its list.
+ */
+private const val LIST_SCALE = 0.7f
+
+/**
+ * Three stacked bars, each shorter than the last.
+ *
+ * This was the library mark before the shelf took that button, and it is kept because it is the
+ * better host for a badge: the shelf is a solid block of ink with no corner to spare, where a
+ * list of lines is mostly air and shortens towards the bottom right — which is exactly where
+ * something has to go. The two marks below are the only callers.
+ */
+private fun DrawScope.drawListLines(extent: Float, color: Color) {
     val stroke = extent * 0.22f
     listOf(-extent * 0.62f, 0f, extent * 0.62f).forEachIndexed { index, y ->
         drawLine(
@@ -412,6 +535,85 @@ val LibraryGlyph: Glyph = { extent, color ->
             cap = StrokeCap.Round,
         )
     }
+}
+
+/**
+ * A list with a play mark beside it: go to a track in the queue.
+ *
+ * The badge sits in the notch the shortening bars already leave open on the right, and stands on
+ * the same line the bottom bar ends on. Level rather than hung below the corner: the list's foot
+ * is the strongest horizontal in the mark, and a badge that crosses it reads as something stuck
+ * on afterwards instead of as the last item in the list.
+ */
+val GoToTrackGlyph: Glyph = { extent, color ->
+    val foot = extent * LIST_HALF_HEIGHT * LIST_SCALE
+    // The list is pushed right by as much as the badge is pulled in, so tucking the two closer
+    // together does not leave the whole mark sitting off-centre in its button.
+    translate(-extent * 0.21f, 0f) {
+        drawListLines(extent * LIST_SCALE, color)
+    }
+    // [PlayGlyph] is drawn about its own middle, so standing it on the foot is a matter of
+    // lifting its centre by its own half-height — which is also why shrinking it costs the
+    // alignment nothing.
+    val badge = extent * 0.28f
+    translate(extent * 0.72f, foot - badge) {
+        PlayGlyph(badge, color)
+    }
+}
+
+/**
+ * A list with an arrow falling beside it: lay the queue out in some other order.
+ *
+ * The arrow is drawn to the list's height, top and bottom, rather than to the button's. The two
+ * are a pair being read together, and an arrow that overshot the thing it is sorting stopped
+ * looking like a mark *about* the list and started looking like a second mark that happened to be
+ * standing next to one. It is struck at the bars' own weight for the same reason.
+ *
+ * Its head is only wide down at the foot, where the bars have already run out, so the list gives
+ * up less width to it than the drawing suggests.
+ *
+ * Which way it points is the one thing the mark reports about the tile it stands for: down for a
+ * list running the way its order runs, up for one running backwards. That is the only state worth
+ * a glance here — *which* order was chosen takes four words to say and belongs in the dialog.
+ */
+val OrderByGlyph: Glyph = { extent, color -> drawOrderedList(extent, color, up = false) }
+
+/** [OrderByGlyph] with the arrow turned over, for a tile whose order is reversed. */
+val OrderByUpGlyph: Glyph = { extent, color -> drawOrderedList(extent, color, up = true) }
+
+private fun DrawScope.drawOrderedList(extent: Float, color: Color, up: Boolean) {
+    translate(-extent * 0.28f, 0f) {
+        drawListLines(extent * LIST_SCALE, color)
+    }
+    val stroke = extent * 0.22f * LIST_SCALE
+    // The shaft stops half a stroke short at each end, because its round caps spend that half
+    // getting to the list's own edge.
+    val reach = extent * LIST_HALF_HEIGHT * LIST_SCALE - stroke / 2f
+    val x = extent * 0.76f
+    // The head is set off the shaft rather than off the arrow's length, so it stays a head on a
+    // line instead of growing back into a triangle with a tail when the list is drawn larger.
+    val wing = extent * 0.32f * LIST_SCALE
+    drawLine(
+        color = color,
+        start = Offset(x, -reach),
+        end = Offset(x, reach),
+        strokeWidth = stroke,
+        cap = StrokeCap.Round,
+    )
+    // Which end carries the head is the whole of the difference between the two marks. The shaft
+    // is symmetrical, so turning the arrow over costs neither height nor width, and the button
+    // does not shift under the thumb when the toggle is thrown.
+    val tip = if (up) -reach else reach
+    val back = if (up) -wing else wing
+    drawPath(
+        path = Path().apply {
+            moveTo(x - wing, tip - back)
+            lineTo(x, tip)
+            lineTo(x + wing, tip - back)
+        },
+        color = color,
+        style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round),
+    )
 }
 
 /**

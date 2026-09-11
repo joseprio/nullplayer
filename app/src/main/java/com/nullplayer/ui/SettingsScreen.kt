@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
@@ -35,6 +36,8 @@ import com.nullplayer.data.AppSettings
 import com.nullplayer.playback.AudioOutput
 import com.nullplayer.playback.AudioOutputs
 import com.nullplayer.playback.VoiceOption
+import com.nullplayer.playback.VoicePart
+import com.nullplayer.playback.voiceParts
 import com.nullplayer.playback.PlayerUiState
 
 /** The stored value for "any headset will do", rather than one particular device. */
@@ -60,6 +63,7 @@ fun SettingsScreen(
     onShowSeeker: (Boolean) -> Unit,
     onShowVaultCounts: (Boolean) -> Unit,
     onVoice: (String) -> Unit,
+    onVoicePart: (VoicePart, Boolean) -> Unit,
     onRequireOutputDevice: (Boolean) -> Unit,
     onRequiredDevice: (String) -> Unit,
     onPreferredDevice: (String) -> Unit,
@@ -225,6 +229,32 @@ fun SettingsScreen(
                 }
             }
 
+            // One switch per part rather than a handful of canned lines to choose between: the
+            // parts are independent, and the announcement is short enough that any combination
+            // of them still reads as a sentence.
+            item {
+                Panel {
+                    Text("Announce", color = TEXT, fontSize = 15.sp)
+                    Text(
+                        text = "What the voice says about a track. With all of them off it says " +
+                            "so, rather than nothing at all.",
+                        color = MUTED,
+                        fontSize = 13.sp,
+                    )
+                }
+            }
+
+            items(VoicePart.entries) { part ->
+                Panel {
+                    ToggleRow(
+                        title = partTitle(part),
+                        subtitle = partSubtitle(part),
+                        checked = part in settings.voiceParts,
+                        onCheckedChange = { onVoicePart(part, it) },
+                    )
+                }
+            }
+
             // -- Audio output -----------------------------------------------------------------
 
             item { SectionHeader("Audio output") }
@@ -339,6 +369,22 @@ private fun VoiceDialog(
             TextButton(onClick = onDismiss) { Text("Done", color = ACCENT) }
         },
     )
+}
+
+/** The part as the settings screen names it. The announcement itself says none of these words. */
+private fun partTitle(part: VoicePart): String = when (part) {
+    VoicePart.TITLE -> "Title"
+    VoicePart.ARTIST -> "Artist"
+    VoicePart.ALBUM -> "Album"
+    VoicePart.YEAR -> "Year"
+}
+
+/** How the part is spoken, so the row can be judged without turning it on to hear it. */
+private fun partSubtitle(part: VoicePart): String = when (part) {
+    VoicePart.TITLE -> "\"Blue Monday.\" An untitled file is named as such."
+    VoicePart.ARTIST -> "\"… by New Order.\""
+    VoicePart.ALBUM -> "\"… from Power, Corruption and Lies.\""
+    VoicePart.YEAR -> "\"… 1983.\""
 }
 
 /** What the Voice row says underneath itself: the chosen voice, by name. */

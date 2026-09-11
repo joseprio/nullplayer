@@ -77,6 +77,7 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.PlatformTextStyle
@@ -94,6 +95,7 @@ import androidx.compose.ui.unit.sp
 import com.nullplayer.data.Group
 import com.nullplayer.data.GroupSummary
 import com.nullplayer.data.Track
+import com.nullplayer.data.TrackOrder
 import com.nullplayer.playback.PlayerUiState
 import com.nullplayer.playback.RepeatMode as PlayerRepeatMode
 import com.nullplayer.playback.SleepTimer
@@ -137,15 +139,6 @@ private val GLYPH_INSET = 7.dp
 private val CHIP_WIDTH = 188.dp
 private val CHIP_GAP = 12.dp
 
-/**
- * The same fixed extent on the other axis, for the ribbon stood on its end in landscape.
- *
- * The horizontal ribbon gets this for free — every chip is [CHIP_WIDTH] wide whatever is written
- * in it. Stood upright the scroll axis is the one the text grows along, so the height has to be
- * pinned by hand, and it depends on whether there is a second line under the name.
- */
-private fun chipHeight(showCounts: Boolean): Dp = if (showCounts) 72.dp else 52.dp
-
 /** Which of the inline panels, if any, is open under the button row. */
 private enum class Panel { NONE, VOLUME, TIMER }
 
@@ -174,6 +167,7 @@ fun PlayerScreen(
     onToggleTimeMode: () -> Unit,
     onToggleFavorite: () -> Unit,
     onGoToTrack: (Int) -> Unit,
+    onSetOrder: (TrackOrder, Boolean) -> Unit,
     onVoiceOver: () -> Unit,
     onVoiceOverLong: () -> Unit,
     onToggleShuffle: () -> Unit,
@@ -195,6 +189,7 @@ fun PlayerScreen(
     var panel by remember { mutableStateOf(Panel.NONE) }
     var showAddress by remember { mutableStateOf(false) }
     var goingToTrack by remember { mutableStateOf(false) }
+    var ordering by remember { mutableStateOf(false) }
     var tagging by remember { mutableStateOf(false) }
 
     BoxWithConstraints(
@@ -266,7 +261,9 @@ fun PlayerScreen(
                                     compact = true,
                                     onToggleFavorite = onToggleFavorite,
                                     onTag = { tagging = true },
-                                ) { goingToTrack = true }
+                                    onGoToTrack = { goingToTrack = true },
+                                    onOrder = { ordering = true },
+                                )
                             }
                             Spacer(Modifier.height(8.dp))
                         }
@@ -301,7 +298,9 @@ fun PlayerScreen(
                         state = state,
                         onToggleFavorite = onToggleFavorite,
                         onTag = { tagging = true },
-                    ) { goingToTrack = true }
+                        onGoToTrack = { goingToTrack = true },
+                        onOrder = { ordering = true },
+                    )
                     Spacer(Modifier.height(30.dp))
                 }
                 Controls(
@@ -363,6 +362,22 @@ fun PlayerScreen(
                     goingToTrack = false
                 },
                 onDismiss = { goingToTrack = false },
+            )
+        }
+
+        // Unguarded on there being a queue, unlike the two above: an order is a property of the
+        // tile rather than of what happens to be in it, and an empty group is exactly where you
+        // might set one before filling it.
+        if (ordering) {
+            OrderDialog(
+                tileName = state.activeName,
+                order = state.order,
+                reversed = state.orderReversed,
+                onSave = { chosen, backwards ->
+                    onSetOrder(chosen, backwards)
+                    ordering = false
+                },
+                onDismiss = { ordering = false },
             )
         }
 
@@ -430,6 +445,14 @@ private fun TopBar(
     onOpenDock: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
+    // Every mark in this row is drawn to the same height, and each one needs a fraction of its own
+    // to get there: a fraction is a share of the button, and what each glyph then does with the box
+    // it is handed differs. The cog fills its box top to bottom, the globe's circle stops just
+    // short, and the shelf is shorter still. The four numbers below are measured rather than
+    // reasoned — they come from the rendered marks — because the stroke a glyph is drawn with sits
+    // astride its edge and so adds half its width to the height, which is easy to forget and
+    // invisible until the row is next to itself. Matching the fractions instead would leave four
+    // icons of four different sizes, which is the first thing the eye reads in a row like this.
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -443,7 +466,7 @@ private fun TopBar(
                 contentDescription = "Upload server",
                 onClick = onToggleWebServer,
                 active = state.web.enabled,
-                glyphFraction = 0.36f,
+                glyphFraction = 0.367f,
             )
             if (state.web.activeUsers > 0) {
                 Box(
@@ -480,14 +503,14 @@ private fun TopBar(
             glyph = LibraryGlyph,
             contentDescription = "Open the vaults",
             onClick = onOpenDock,
-            glyphFraction = 0.34f,
+            glyphFraction = 0.41f,
         )
         GlyphButton(
             glyph = EqualizerGlyph,
             contentDescription = "Equalizer",
             onClick = onOpenEqualizer,
             active = state.settings.equalizerEnabled,
-            glyphFraction = 0.36f,
+            glyphFraction = 0.367f,
         )
         GlyphButton(
             glyph = SettingsGlyph,
@@ -513,22 +536,19 @@ private fun Hero(
     compact: Boolean = false,
     onToggleFavorite: () -> Unit,
     onTag: () -> Unit,
-    onClick: () -> Unit,
+    onGoToTrack: () -> Unit,
+    onOrder: () -> Unit,
 ) {
     // An empty vault has no position to report, and saying so twice — here and on the greyed-out
     // transport below — is one line of chrome more than it is worth.
     if (!state.hasTracks) return
 
-    // The readout stays centred on the screen while the target around it is only as wide as the
-    // mark: a press anywhere in the middle of the player should not move the queue.
+    // The readout stays centred on the screen while the targets in it are only as wide as their
+    // own marks: a press anywhere in the middle of the player should not move the queue.
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            // A number in a queue, so the one thing worth doing to it is typing a different one.
-            modifier = Modifier
-                .clip(RoundedCornerShape(16.dp))
-                .clickable(onClickLabel = "Go to a track", onClick = onClick)
-                .padding(horizontal = 28.dp, vertical = if (compact) 2.dp else 6.dp),
+            modifier = Modifier.padding(vertical = if (compact) 2.dp else 6.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // Its own target inside the readout's: a press on the heart marks the track, a
@@ -584,71 +604,74 @@ private fun Hero(
                 )
             }
             Spacer(Modifier.height(if (compact) 3.dp else 10.dp))
-            Text(
-                text = queuePosition(state),
-                color = TEXT,
-                fontSize = if (compact) 34.sp else 46.sp,
-                // Digits and a slash, and nothing that descends below the baseline -- so the
-                // leading a line box reserves by default is height held for characters this text
-                // cannot contain. Portrait can afford to leave it; landscape cannot.
-                lineHeight = if (compact) 36.sp else TextUnit.Unspecified,
-                fontWeight = FontWeight.Light,
-                fontFamily = FontFamily.Monospace,
-                letterSpacing = 1.sp,
-            )
+            // A button to each side of the readout, each answering for the number it stands
+            // beside: the left one changes where in the queue we are, the right one changes what
+            // the queue is counting. The readout itself is no longer a target — it used to be one
+            // big invisible one for the go-to dialog, which worked only for whoever had been told
+            // it was there, and which the heart and the tag had to cut their own holes in.
+            //
+            // Both are the same size, so the figure between them stays on the centre line the
+            // ribbon and the transport are drawn about.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                GlyphButton(
+                    glyph = GoToTrackGlyph,
+                    contentDescription = "Go to a track",
+                    onClick = onGoToTrack,
+                    size = if (compact) 38.dp else 46.dp,
+                    // Drawn large for their targets, where the heart and the tag above are drawn
+                    // small: those two sit inside a word set at 11sp, these stand against a
+                    // figure set at 46, and a mark that holds its own beside one is lost beside
+                    // the other. Both marks are wider than they are tall, so this is set by what
+                    // fits across the button rather than by the height it leaves.
+                    glyphFraction = 0.44f,
+                    tint = MUTED,
+                )
+                Spacer(Modifier.width(if (compact) 6.dp else 12.dp))
+                Text(
+                    text = queuePosition(state),
+                    color = TEXT,
+                    fontSize = if (compact) 34.sp else 46.sp,
+                    // Digits and a slash, and nothing that descends below the baseline -- so the
+                    // leading a line box reserves by default is height held for characters this
+                    // text cannot contain. Portrait can afford to leave it; landscape cannot.
+                    lineHeight = if (compact) 36.sp else TextUnit.Unspecified,
+                    fontWeight = FontWeight.Light,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp,
+                )
+                Spacer(Modifier.width(if (compact) 6.dp else 12.dp))
+                GlyphButton(
+                    glyph = if (state.orderReversed) OrderByUpGlyph else OrderByGlyph,
+                    contentDescription = if (state.orderReversed) {
+                        "Order this group, currently reversed"
+                    } else {
+                        "Order this group"
+                    },
+                    onClick = onOrder,
+                    size = if (compact) 38.dp else 46.dp,
+                    glyphFraction = 0.44f,
+                    // The same grey as its opposite number, and deliberately not lit to report a
+                    // non-default order: the pair reads as one piece of furniture around the
+                    // readout, and one of the two glowing green made it look like a toggle that
+                    // was on rather than a door into a dialog.
+                    tint = MUTED,
+                )
+            }
             // Small print, and deliberately so: it is worth a glance when you wonder what you are
             // listening to, and worth nothing at all the rest of the time. It arrives a beat after
             // the track starts, so the space is not reserved -- there is no gap to hold open when
             // there is nothing to put in it, and the readout above stays where it is either way.
             state.audioProfile?.let { profile ->
                 Spacer(Modifier.height(if (compact) 1.dp else 6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = profile.summary,
-                        color = MUTED,
-                        fontSize = 8.sp,
-                        lineHeight = if (compact) 9.sp else TextUnit.Unspecified,
-                        letterSpacing = 0.5.sp,
-                    )
-                    if (profile.isHiRes) {
-                        Spacer(Modifier.width(5.dp))
-                        HiResMark()
-                    }
-                }
+                Text(
+                    text = profile.summary,
+                    color = MUTED,
+                    fontSize = 8.sp,
+                    lineHeight = if (compact) 9.sp else TextUnit.Unspecified,
+                    letterSpacing = 0.5.sp,
+                )
             }
         }
-    }
-}
-
-/**
- * The Hi-Res Audio mark: two letters in a box, at the end of the line.
- *
- * Drawn rather than shipped as an icon because the official gold-and-black badge is a trademark
- * with rules about its use, and this is a room where everything else is grey. It reads as what it
- * is -- a small standards mark, in the same ink as the words it follows.
- */
-@Composable
-private fun HiResMark() {
-    val shape = RoundedCornerShape(2.dp)
-    Box(
-        modifier = Modifier
-            .clip(shape)
-            .border(1.dp, MUTED, shape)
-            .padding(horizontal = 3.dp, vertical = 1.dp),
-    ) {
-        // The box is sized by the text, so the text has to stop lying about how tall it is. A
-        // glyph box carries padding above and below the letters for ascenders and descenders that
-        // "HR" does not have, and a border drawn around that reads as a tall empty rectangle with
-        // two small letters adrift inside it. Constraining the height instead only clips them.
-        Text(
-            text = "HR",
-            color = MUTED,
-            fontSize = 7.sp,
-            lineHeight = 8.sp,
-            fontWeight = FontWeight.SemiBold,
-            letterSpacing = 0.5.sp,
-            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false)),
-        )
     }
 }
 
@@ -777,6 +800,84 @@ private fun GoToTrackDialog(
 }
 
 /**
+ * How the tile on the ribbon lays its tracks out.
+ *
+ * Named after the tile rather than titled "Sort", because this is the one dialog in the app that
+ * changes something about a group instead of about the app, and the group it changes is whichever
+ * one the ribbon happens to be on. "Order Group #3" says that; "Sort" does not.
+ *
+ * Both answers are taken on Save rather than applied as they are touched. Each one rebuilds the
+ * queue, and a user reading four options would otherwise have the numbers under the dialog
+ * reshuffle three times on the way to the one they meant.
+ */
+@Composable
+private fun OrderDialog(
+    tileName: String,
+    order: TrackOrder,
+    reversed: Boolean,
+    onSave: (TrackOrder, Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var chosen by remember { mutableStateOf(order) }
+    var backwards by remember { mutableStateOf(reversed) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = PANEL,
+        titleContentColor = TEXT,
+        textContentColor = MUTED,
+        title = { Text("Order $tileName") },
+        text = {
+            Column {
+                TrackOrder.entries.forEach { entry ->
+                    ChoiceRow(
+                        title = entry.label,
+                        selected = chosen == entry,
+                        onSelect = { chosen = entry },
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Reverse", color = TEXT, fontSize = 15.sp)
+                        Text(orderHint(chosen, backwards), color = MUTED, fontSize = 12.sp)
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    NullSwitch(checked = backwards, onCheckedChange = { backwards = it })
+                }
+                // Worth saying once here rather than leaving it to be discovered: the two are not
+                // in competition, and a user who has just picked "Artist" and still hears the
+                // library jumping about would reasonably think this dialog had not worked.
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    text = "Shuffle still decides what plays next. This is the order the tracks " +
+                        "are numbered in.",
+                    color = MUTED,
+                    // Smaller than the rows above, and smaller than their subtitles: it is a
+                    // footnote about the whole dialog rather than a label on anything in it, and
+                    // at the same size it competed with the choices for the first read.
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(chosen, backwards) }) { Text("Save", color = ACCENT) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = MUTED) }
+        },
+    )
+}
+
+/** Which end the chosen order starts at, in the words that order makes sense in. */
+private fun orderHint(order: TrackOrder, reversed: Boolean): String = when (order) {
+    TrackOrder.ADDED -> if (reversed) "Newest first." else "Oldest first."
+    TrackOrder.RELEASED -> if (reversed) "Latest first." else "Earliest first."
+    else -> if (reversed) "Z to A." else "A to Z."
+}
+
+/**
  * Where in the queue we are, as the player's hero readout and the mini player both say it.
  *
  * A queue with nothing chosen yet still knows how much it holds, so the total is stated and only
@@ -890,10 +991,26 @@ private fun VaultRibbon(
     val listState = rememberLazyListState()
 
     BoxWithConstraints(modifier.then(if (upright) Modifier else Modifier.fillMaxWidth())) {
+        // How big a tile is along the axis this ribbon scrolls. Lying down that is [CHIP_WIDTH],
+        // which every chip is whatever is written in it. Stood upright it is the height, and the
+        // height is the axis the text grows along — so it is measured off the list rather than
+        // stated here. It used to be a constant, 72dp, which is what a name and a count come to at
+        // the default font scale and nowhere near it above: a reader who had turned their text up
+        // got the count cropped off the bottom of every tile in landscape, and the name shoved off
+        // centre by the overflow doing it.
+        val density = LocalDensity.current
+        var uprightExtent by remember { mutableStateOf<Dp?>(null) }
+        LaunchedEffect(listState, density) {
+            snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull()?.size }
+                .collect { size ->
+                    if (size != null && size > 0) uprightExtent = with(density) { size.toDp() }
+                }
+        }
+
         // Half a row minus half a tile, which is what puts any tile — including the first and the
         // last — in the centre when it is scrolled to the start of the content area. Measured
         // along whichever axis the ribbon actually scrolls.
-        val tileExtent = if (upright) chipHeight(showCounts) else CHIP_WIDTH
+        val tileExtent = if (upright) uprightExtent ?: 0.dp else CHIP_WIDTH
         val sidePadding = (((if (upright) maxHeight else maxWidth) - tileExtent) / 2)
             .coerceAtLeast(0.dp)
 
@@ -915,7 +1032,11 @@ private fun VaultRibbon(
         // reporting a move that happened long ago on a screen the user was not looking at.
         var placed by remember { mutableStateOf(false) }
 
-        LaunchedEffect(activeId, tiles.size) {
+        // Keyed on the extent as well, so the first placement waits for the measurement: putting
+        // a tile in the middle of a list still padded for a tile of no height would land it
+        // somewhere else and then count itself done.
+        LaunchedEffect(activeId, tiles.size, tileExtent) {
+            if (upright && uprightExtent == null) return@LaunchedEffect
             val index = tiles.indexOfFirst { it.id == activeId }
             if (index < 0) return@LaunchedEffect
             when {
@@ -965,7 +1086,6 @@ private fun VaultRibbon(
                         selected = tile.id == highlighted,
                         showCount = showCounts,
                         onClick = { onOpen(tile.id) },
-                        height = tileExtent,
                     )
                 }
             }
@@ -1010,8 +1130,6 @@ private fun VaultChip(
     selected: Boolean,
     showCount: Boolean,
     onClick: () -> Unit,
-    /** Pinned only in the upright ribbon, where the scroll axis is the one the text grows along. */
-    height: Dp? = null,
 ) {
     val colour = Color(tile.colorArgb)
     // Unselected tiles are the same colour laid over the page, so the text colour is decided
@@ -1021,8 +1139,9 @@ private fun VaultChip(
 
     Column(
         modifier = Modifier
+            // Wide by rule, tall by what is in it. Pinning the height as well is what cropped the
+            // upright ribbon's tiles; the carousel gets the fixed extent it needs by measuring.
             .width(CHIP_WIDTH)
-            .then(if (height != null) Modifier.height(height) else Modifier)
             .clip(RoundedCornerShape(14.dp))
             .background(fill)
             .border(

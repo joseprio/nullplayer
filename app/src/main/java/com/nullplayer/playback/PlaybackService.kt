@@ -78,6 +78,9 @@ class PlaybackService : MediaSessionService() {
     /** The loudness read for the current track, cancelled if the track changes under it. */
     private var loudnessLookup: Job? = null
 
+    /** Writes the resume point down as the music moves. Alive only while it is moving. */
+    private var progressJob: Job? = null
+
     /** The format the renderer was last handed, and the job describing it to the UI. */
     @Volatile
     private var audioFormat: Format? = null
@@ -220,7 +223,12 @@ class PlaybackService : MediaSessionService() {
             voiceOver.speak(VoiceOver.describe(null))
             return
         }
-        scope.launch { voiceOver.speak(VoiceOver.describe(repository.track(id))) }
+        // Read at the moment of speaking rather than held in a field: the announcement happens
+        // once, on a press, so there is nothing to keep in step between presses.
+        scope.launch {
+            val parts = settings.all.first().voiceParts
+            voiceOver.speak(VoiceOver.describe(repository.track(id), parts))
+        }
     }
 
     private fun speakPosition() {
@@ -459,11 +467,33 @@ class PlaybackService : MediaSessionService() {
     private inner class PlaybackTicket : Player.Listener {
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
             if (!playWhenReady) PlaybackGate.relockPlayback()
+            // A pause is where a session usually ends, so it is the one worth writing down
+            // exactly rather than leaving to the next tick.
+            saveResumePoint()
+        }
+
+        /** The tick is what makes the resume point durable, so it runs only while there is one. */
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            trackProgress(isPlaying)
+        }
+
+        /**
+         * A seek moves the position without the clock having moved it, and a seek made while
+         * paused would otherwise not be written down until something else happened to save.
+         */
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            saveResumePoint()
         }
 
         /** Every track brings its own level with it, so the gain is re-read on every change. */
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             applyLoudness(mediaItem?.mediaId)
+            // The position the old track reached is of no interest once it has been left.
+            saveResumePoint()
             // Also from here, not only from the renderer: two files encoded identically produce
             // one format between them and so only one format change, but whether each of them
             // varies its bitrate is a question about the file rather than about the format.
@@ -626,6 +656,44 @@ class PlaybackService : MediaSessionService() {
                 SleepTimer.cancel()
             }
         }
+    }
+
+    /**
+     * Writes down where the music is, so a cold start can pick it up.
+     *
+     * Here rather than in the view model because this is the half that survives the Activity, and
+     * a phone playing in a pocket is exactly the case worth surviving. Every few seconds rather
+     * than every frame: a preference file written at the rate the seeker moves would be a disk
+     * write per tick, and the cost of being out of date is hearing a few seconds twice.
+     *
+     * The tick runs only while the music does. A pause, a seek and a track change each write on
+     * their own, so a stopped player has nothing left to say and no reason to keep waking up.
+     *
+     * There is deliberately no write from [onDestroy]. A DataStore write is a suspending one, the
+     * scope it would need is being cancelled in the same breath, and a force-stop never runs it
+     * anyway -- so the tick is what makes this durable, and the tick is enough.
+     */
+    private fun trackProgress(playing: Boolean) {
+        if (!playing) {
+            progressJob?.cancel()
+            progressJob = null
+            return
+        }
+        if (progressJob?.isActive == true) return
+        progressJob = scope.launch {
+            while (true) {
+                delay(RESUME_SAVE_MS)
+                saveResumePoint()
+            }
+        }
+    }
+
+    /** The current track and how far into it, or nothing at all when the queue is empty. */
+    private fun saveResumePoint() {
+        val current = player ?: return
+        val trackId = current.currentMediaItem?.mediaId ?: return
+        val position = current.currentPosition.coerceAtLeast(0L)
+        scope.launch { settings.setResumePoint(trackId, position) }
     }
 
     /**
@@ -900,5 +968,8 @@ class PlaybackService : MediaSessionService() {
     private companion object {
         const val TAG = "PlaybackService"
         const val DUCKED_VOLUME = 0.18f
+
+        /** How often the resume point is written down while the music is running. */
+        const val RESUME_SAVE_MS = 5_000L
     }
 }

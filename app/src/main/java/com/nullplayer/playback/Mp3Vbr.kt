@@ -51,7 +51,7 @@ internal object Mp3Vbr {
     }
 
     /** The offset the audio starts at: past an ID3v2 tag if one is there, zero if not. */
-    private fun afterId3(bytes: ByteArray, length: Int): Int {
+    internal fun afterId3(bytes: ByteArray, length: Int): Int {
         if (length < ID3_HEADER) return 0
         if (bytes[0].toInt().toChar() != 'I' ||
             bytes[1].toInt().toChar() != 'D' ||
@@ -70,7 +70,7 @@ internal object Mp3Vbr {
     }
 
     /** Walks forward to the first frame that parses, then reads the slot behind its header. */
-    private fun variableIn(bytes: ByteArray, from: Int): Boolean? {
+    internal fun variableIn(bytes: ByteArray, from: Int): Boolean? {
         var at = from
         while (at + FRAME_HEADER < bytes.size) {
             val frame = frameAt(bytes, at)

@@ -29,17 +29,6 @@ data class AudioProfile(
 ) {
 
     /**
-     * The Hi-Res Audio bar: 24 bit and 48 kHz, and both of them.
-     *
-     * Lossless is required on top of the two numbers even though the published standard is written
-     * in terms of them alone, because a lossy file has no bit depth of its own to fail on -- what
-     * the decoder reports is the depth it happens to be decoding *to*, which is a property of the
-     * decoder and not of the recording. Reading that as Hi-Res would badge a 128 kbps MP3.
-     */
-    val isHiRes: Boolean
-        get() = lossless && (bits ?: 0) >= HI_RES_BITS && (sampleRateHz ?: 0) >= HI_RES_RATE_HZ
-
-    /**
      * The line as it is read.
      *
      * Lossy formats are described by their bitrate, which is the thing that was traded away.
@@ -57,7 +46,7 @@ data class AudioProfile(
         val rate = sampleRateHz?.let { kiloHertz(it) }
         val depth = bits?.let { "$it bit" }
         return when {
-            rate != null && depth != null -> "$rate / $depth"
+            rate != null && depth != null -> "$rate · $depth"
             else -> rate ?: depth
         }
     }
@@ -83,10 +72,6 @@ data class AudioProfile(
     }
 
     companion object {
-
-        /** The two numbers the Hi-Res Audio mark is defined by. */
-        private const val HI_RES_BITS = 24
-        private const val HI_RES_RATE_HZ = 48_000
 
         private const val KEY_LABEL = "label"
         private const val KEY_LOSSLESS = "lossless"
@@ -146,7 +131,7 @@ data class AudioProfile(
          * file called .m4a would be telling the truth in a language nobody asked a question in.
          */
         @UnstableApi
-        private fun labelFor(sampleMime: String, containerMime: String?): String = when {
+        internal fun labelFor(sampleMime: String, containerMime: String?): String = when {
             sampleMime == MimeTypes.AUDIO_MPEG -> "MP3"
             sampleMime == MimeTypes.AUDIO_FLAC -> "FLAC"
             sampleMime == MimeTypes.AUDIO_VORBIS -> "OGG"
@@ -169,10 +154,11 @@ data class AudioProfile(
         /**
          * The depth the decoder is producing, which for a lossless format is the file's own.
          *
-         * [AudioProfile.isHiRes] is what guards against reading anything into this for a lossy
-         * one, where the number belongs to the decoder rather than to the recording.
+         * For a lossy one it is the depth the decoder happens to be decoding *to*, which is a
+         * property of the decoder rather than of the recording -- which is why [summary] never
+         * quotes it for a lossy file.
          */
-        private fun bitsOf(pcmEncoding: Int): Int? = when (pcmEncoding) {
+        internal fun bitsOf(pcmEncoding: Int): Int? = when (pcmEncoding) {
             C.ENCODING_PCM_8BIT -> 8
             C.ENCODING_PCM_16BIT, C.ENCODING_PCM_16BIT_BIG_ENDIAN -> 16
             C.ENCODING_PCM_24BIT, C.ENCODING_PCM_24BIT_BIG_ENDIAN -> 24

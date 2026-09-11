@@ -1,6 +1,7 @@
 [versions]
 agp = "8.7.3"
 kotlin = "2.0.21"
+junit = "4.13.2"
 ksp = "2.0.21-1.0.28"
 coreKtx = "1.15.0"
 lifecycle = "2.8.7"
@@ -44,6 +45,8 @@ room-compiler = { group = "androidx.room", name = "room-compiler", version.ref =
 nanohttpd = { group = "org.nanohttpd", name = "nanohttpd", version.ref = "nanohttpd" }
 
 haze = { group = "dev.chrisbanes.haze", name = "haze", version.ref = "haze" }
+
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
