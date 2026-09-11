@@ -250,8 +250,7 @@ class MainActivity : FragmentActivity() {
                                 onToggleWebServer = viewModel::toggleWebServer,
                                 onOpenEqualizer = { screen = Screen.EQUALIZER },
                                 onReadSharedGroups = viewModel::readSharedGroups,
-                                onSetTag = viewModel::setTag,
-                                onCreateGroupWith = viewModel::createGroupWith,
+                                onApplyTags = viewModel::applyTags,
                                 onSelectVault = viewModel::selectGroup,
                                 // Tapping a ribbon tile manages that tile. It reaches the same
                                 // named screen the dock does, so it passes the same prompt.
@@ -305,8 +304,7 @@ class MainActivity : FragmentActivity() {
                                 onSetFavorite = viewModel::setFavorite,
                                 onDelete = viewModel::delete,
                                 onReadSharedGroups = viewModel::readSharedGroups,
-                                onSetTag = viewModel::setTag,
-                                onCreateGroupWith = viewModel::createGroupWith,
+                                onApplyTags = viewModel::applyTags,
                                 onClose = {
                                     screen = if (tracksFromRibbon) Screen.PLAYER else Screen.LIBRARY
                                 },

@@ -182,8 +182,7 @@ fun PlayerScreen(
     onOpenDock: () -> Unit,
     onOpenSettings: () -> Unit,
     onReadSharedGroups: (List<Track>) -> Unit,
-    onSetTag: (List<Track>, String, Boolean) -> Unit,
-    onCreateGroupWith: (List<Track>) -> Unit,
+    onApplyTags: (List<Track>, Set<String>, Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var panel by remember { mutableStateOf(Panel.NONE) }
@@ -349,8 +348,7 @@ fun PlayerScreen(
             state = state,
             showing = tagging,
             onReadSharedGroups = onReadSharedGroups,
-            onSetTag = onSetTag,
-            onCreateGroupWith = onCreateGroupWith,
+            onApplyTags = onApplyTags,
             onDismiss = { tagging = false },
         )
 
@@ -688,8 +686,7 @@ private fun TagDialogFor(
     state: PlayerUiState,
     showing: Boolean,
     onReadSharedGroups: (List<Track>) -> Unit,
-    onSetTag: (List<Track>, String, Boolean) -> Unit,
-    onCreateGroupWith: (List<Track>) -> Unit,
+    onApplyTags: (List<Track>, Set<String>, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val track = state.currentTrack
@@ -709,8 +706,7 @@ private fun TagDialogFor(
     TagDialog(
         state = state,
         tracks = listOf(track),
-        onSetTag = { groupId, tagged -> onSetTag(listOf(track), groupId, tagged) },
-        onCreateGroup = { onCreateGroupWith(listOf(track)) },
+        onApply = { groupIds, newGroup -> onApplyTags(listOf(track), groupIds, newGroup) },
         onDismiss = onDismiss,
     )
 }

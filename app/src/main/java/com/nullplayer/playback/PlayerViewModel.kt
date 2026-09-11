@@ -1235,28 +1235,6 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { repository.createGroup() }
     }
 
-    /**
-     * A new group with the tracks already in it.
-     *
-     * The two steps are one action here because of where it is reached from: the tag sheet, which
-     * is open precisely because there are tracks waiting to be filed. Making the group and then
-     * asking the user to tick it would be a ceremony with one possible outcome.
-     *
-     * It borrows [VaultRepository.createGroup] rather than naming and colouring a group of its
-     * own, so a group made from the sheet and a group made from the library's plus are the same
-     * kind of thing -- named by its cardinal, coloured a step further along the palette, and
-     * renamed by the same pencil when the default stops being good enough.
-     */
-    fun createGroupWith(tracks: List<Track>) {
-        if (tracks.isEmpty()) return
-        viewModelScope.launch {
-            val group = repository.createGroup()
-            val ids = tracks.map { it.id }
-            repository.setTag(ids, group.id, true)
-            _state.update { it.copy(sharedGroupIds = repository.groupsSharedBy(ids)) }
-        }
-    }
-
     fun updateGroup(id: String, name: String, colorArgb: Int) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return
@@ -1282,12 +1260,30 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setTag(tracks: List<Track>, groupId: String, tagged: Boolean) {
+    /**
+     * Writes the tag sheet's answer: [groupIds] is every group the tracks should now all be in.
+     *
+     * Only the difference from what they shared when the sheet opened is written. A group that
+     * holds some of the selection and was left unticked is not one the user said anything about,
+     * and emptying it of those tracks would be putting words in their mouth.
+     *
+     * [newGroup] makes a group and files the tracks into it in the same breath, because the sheet
+     * is open precisely because there are tracks waiting to be filed: making the group and then
+     * asking the user to tick it would be a ceremony with one possible outcome. It borrows
+     * [VaultRepository.createGroup] rather than naming and colouring a group of its own, so a
+     * group made from the sheet and a group made from the library's plus are the same kind of
+     * thing -- named by its cardinal, coloured a step further along the palette, and renamed by
+     * the same pencil when the default stops being good enough.
+     */
+    fun applyTags(tracks: List<Track>, groupIds: Set<String>, newGroup: Boolean) {
         if (tracks.isEmpty()) return
         viewModelScope.launch {
-            repository.setTag(tracks.map { it.id }, groupId, tagged)
-            val shared = repository.groupsSharedBy(tracks.map { it.id })
-            _state.update { it.copy(sharedGroupIds = shared) }
+            val ids = tracks.map { it.id }
+            val before = repository.groupsSharedBy(ids)
+            (groupIds - before).forEach { repository.setTag(ids, it, true) }
+            (before - groupIds).forEach { repository.setTag(ids, it, false) }
+            if (newGroup) repository.setTag(ids, repository.createGroup().id, true)
+            _state.update { it.copy(sharedGroupIds = repository.groupsSharedBy(ids)) }
         }
     }
 

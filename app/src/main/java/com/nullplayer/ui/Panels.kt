@@ -30,6 +30,10 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -328,15 +332,24 @@ internal fun Glyph(
  * A group is ticked when every selected track is already in it, so a tap reads as "put all of
  * these here" or "take all of these out" rather than as a per-track toggle, which would need a
  * third state to be honest about a mixed selection.
+ *
+ * Nothing is written until Apply. The ticks are held here, against what the database said when
+ * the sheet opened, and Cancel throws them away -- which is the only way a "new group" tick can be
+ * offered as a tick: a group made the moment the row was tapped would outlive a cancelled sheet,
+ * and the library would fill with empty groups nobody meant to keep.
  */
 @Composable
 internal fun TagDialog(
     state: PlayerUiState,
     tracks: List<Track>,
-    onSetTag: (String, Boolean) -> Unit,
-    onCreateGroup: () -> Unit,
+    onApply: (groupIds: Set<String>, newGroup: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // Keyed on the answer so that the ticks follow it in: the read is asked for as the sheet
+    // opens and lands a moment later, and a set captured before then would be the last sheet's.
+    var ticked by remember(state.sharedGroupIds) { mutableStateOf(state.sharedGroupIds) }
+    var newGroup by remember { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PANEL,
@@ -358,37 +371,16 @@ internal fun TagDialog(
                     )
                 }
                 state.groups.forEach { group ->
-                    val tagged = group.id in state.sharedGroupIds
+                    val tagged = group.id in ticked
                     val groupColour = Color(group.colorArgb)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { onSetTag(group.id, !tagged) }
-                            .padding(vertical = 10.dp, horizontal = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                    TagRow(
+                        name = group.name,
+                        nameColour = TEXT,
+                        checked = tagged,
+                        checkColour = groupColour,
+                        onClick = { ticked = if (tagged) ticked - group.id else ticked + group.id },
                     ) {
                         Box(Modifier.size(12.dp).clip(CircleShape).background(groupColour))
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            text = group.name,
-                            color = TEXT,
-                            fontSize = 15.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        // The row owns the click, so the box itself is not separately
-                        // focusable — a tap anywhere on the line picks the group.
-                        Checkbox(
-                            checked = tagged,
-                            onCheckedChange = null,
-                            colors = CheckboxDefaults.colors(
-                                checkedColor = groupColour,
-                                checkmarkColor = readableOn(groupColour),
-                                uncheckedColor = LINE,
-                            ),
-                        )
                     }
                 }
 
@@ -396,13 +388,15 @@ internal fun TagDialog(
                 // a group that does not exist yet is a normal thing to want -- it is often the
                 // reason the sheet was opened -- and sending someone to the library to make it
                 // first loses both the selection and the thought.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onCreateGroup)
-                        .padding(vertical = 10.dp, horizontal = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                //
+                // Just "New group": the title above has already said whether this is one track
+                // or five, and saying it again cost more width than the dialog has.
+                TagRow(
+                    name = "New group",
+                    nameColour = ACCENT,
+                    checked = newGroup,
+                    checkColour = ACCENT,
+                    onClick = { newGroup = !newGroup },
                 ) {
                     // An outline where the groups have a filled dot: there is no colour to show
                     // until the group exists and the palette has handed it one.
@@ -412,19 +406,61 @@ internal fun TagDialog(
                             .clip(CircleShape)
                             .border(1.dp, MUTED, CircleShape)
                     )
-                    Spacer(Modifier.width(12.dp))
-                    // Just "New group": the title above has already said whether this is one
-                    // track or five, and saying it again cost more width than the dialog has.
-                    Text(
-                        text = "New group",
-                        color = ACCENT,
-                        fontSize = 15.sp,
-                    )
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Done", color = ACCENT) }
+            TextButton(
+                onClick = {
+                    onApply(ticked, newGroup)
+                    onDismiss()
+                },
+            ) { Text("Apply", color = ACCENT) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = MUTED) }
         },
     )
+}
+
+/** One line of the tag sheet: a dot, a name, and a box, with the whole line taking the tap. */
+@Composable
+private fun TagRow(
+    name: String,
+    nameColour: Color,
+    checked: Boolean,
+    checkColour: Color,
+    onClick: () -> Unit,
+    dot: @Composable () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        dot()
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = name,
+            color = nameColour,
+            fontSize = 15.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        // The row owns the click, so the box itself is not separately focusable — a tap
+        // anywhere on the line picks the group.
+        Checkbox(
+            checked = checked,
+            onCheckedChange = null,
+            colors = CheckboxDefaults.colors(
+                checkedColor = checkColour,
+                checkmarkColor = readableOn(checkColour),
+                uncheckedColor = LINE,
+            ),
+        )
+    }
 }
