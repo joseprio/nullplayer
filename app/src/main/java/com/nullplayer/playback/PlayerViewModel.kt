@@ -563,6 +563,14 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
         val carriedOver = tracks.indexOfFirst { it.id == playingId }
 
+        // The same goes for a switch, or a reordering, that keeps the playing track: the rest of
+        // the queue is rewritten around it and it never notices. A player sitting idle has no
+        // decoder to protect, and is rebuilt so that it gets prepared.
+        if (carriedOver >= 0 && player.playbackState != Player.STATE_IDLE) {
+            spliceQueue(player, items, carriedOver)
+            return
+        }
+
         // Picking up where the last session stopped, which is only ever the first queue built
         // into a player holding nothing: a service that outlived the Activity already has both
         // the queue and the position, and this would wind it back. Spent whether or not it lands,
@@ -607,11 +615,28 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * Swaps out everything except the track being played, which stays where it is: the items in
+     * front of it are replaced by those that now precede it, and the ones behind it by those that
+     * now follow. The player keeps its current period through both edits, so the audio carries
+     * on, the position holds, and playing or paused stays as it was.
+     */
+    private fun spliceQueue(player: Player, items: List<MediaItem>, carriedOver: Int) {
+        val before = items.subList(0, carriedOver)
+        val after = items.subList(carriedOver + 1, items.size)
+        val current = player.currentMediaItemIndex
+        if (current > 0 || before.isNotEmpty()) player.replaceMediaItems(0, current, before)
+        // The playing track now sits at [carriedOver], and the front edit is already counted.
+        val tail = carriedOver + 1
+        val count = player.mediaItemCount
+        if (count > tail || after.isNotEmpty()) player.replaceMediaItems(tail, count, after)
+    }
+
+    /**
      * Edits the live queue instead of replacing it, and says whether it could.
      *
      * Only insertions and deletions are expressible this way, so the tracks common to both lists
      * have to appear in the same order in each; a genuine reordering is left to the caller's
-     * rebuild. So is the disappearance of the track being played — removing it would have the
+     * [spliceQueue]. So is the disappearance of the track being played — removing it would have the
      * player slide onto whatever followed, and stopping is the answer [syncQueue] deliberately
      * gives when a file goes away underneath it.
      *
