@@ -568,13 +568,15 @@ private fun Hero(
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
+                    // The Favorites red rather than the accent, so the heart matches the tile
+                    // it puts the track in.
                     Glyph(
                         if (state.currentIsFavorite) {
                             Icons.Filled.Favorite
                         } else {
                             Icons.Filled.FavoriteBorder
                         },
-                        if (state.currentIsFavorite) ACCENT else MUTED,
+                        if (state.currentIsFavorite) Color(Group.FAVORITES_COLOR) else MUTED,
                         contentDescription = null,
                         size = 20.dp,
                     )
