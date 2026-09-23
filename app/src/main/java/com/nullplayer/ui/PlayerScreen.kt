@@ -161,6 +161,13 @@ private const val DIAL_SPAN = 1.84f
 private const val TAG_GLYPH = 0.34f
 private const val TAG_SPAN = 2f
 private const val ORDER_SPAN = 2.32f
+
+/**
+ * How much wider the order mark is drawn than the dial pad it faces across the readout. Its
+ * three thin bars carry less ink than the pad's grid of dots, and at the same width they read
+ * as the smaller of the two.
+ */
+private const val ORDER_BOOST = 1.55f
 private const val VOLUME_GLYPH = 0.36f
 private const val VOLUME_SPAN = 1.9f
 private const val TIMER_GLYPH = 0.34f
@@ -1027,9 +1034,12 @@ private fun Hero(
                 },
                 onClick = onOrder,
                 size = target,
-                glyphFraction = mark / ORDER_SPAN / target,
+                glyphFraction = mark * ORDER_BOOST / ORDER_SPAN / target,
                 tint = MUTED,
-                modifier = Modifier.align(Alignment.CenterEnd).offset(x = overhang),
+                // Pushed out by its own air, not the pad's, so the wider mark still meets the
+                // line's end rather than running past it.
+                modifier = Modifier.align(Alignment.CenterEnd)
+                    .offset(x = (target - mark * ORDER_BOOST) / 2 + SEEKER_THICKNESS / 2),
             )
         }
     }
@@ -1301,13 +1311,6 @@ internal fun queueHere(state: PlayerUiState): String {
         (state.trackIndex + 1).toString().padStart(width, '0')
     }
 }
-
-/**
- * [queueHere] and [queueTotal] as one string, for the mini player, where the figure is a label
- * set at 12pt rather than a display and the slash wants no air around it.
- */
-internal fun queuePosition(state: PlayerUiState): String =
-    queueHere(state) + "/" + queueTotal(state)
 
 // -- Controls -----------------------------------------------------------------------------------
 
@@ -2129,8 +2132,8 @@ private fun Utilities(
         ),
         modifier = Modifier.fillMaxWidth().lineEdges().bleed(SEEKER_THICKNESS / 2),
     ) {
-        // The Favorites magenta rather than the accent, so the heart matches the tile it puts the
-        // track in.
+        // The Favorites magenta rather than the accent, so the heart is the tile it puts the
+        // track in -- at full strength, where the tile wears it a shade paler.
         Box(
             modifier = Modifier
                 .size(size)
@@ -2147,7 +2150,7 @@ private fun Utilities(
         ) {
             Glyph(
                 if (state.currentIsFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                if (state.currentIsFavorite) Color(Group.FAVORITES_COLOR) else TEXT,
+                if (state.currentIsFavorite) Color(Group.FAVORITES_HEART_COLOR) else TEXT,
                 contentDescription = null,
                 size = size * HEART_GLYPH,
             )

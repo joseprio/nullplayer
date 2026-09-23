@@ -27,10 +27,13 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.nullplayer.playback.PlayerUiState
@@ -168,10 +171,19 @@ fun MiniPlayer(
                     // terms, and "--/0" read as a leftover rather than a state.
                     if (state.hasTracks) {
                         Spacer(Modifier.width(10.dp))
+                        // Set like the player's readout: where we are bold, the total light,
+                        // both white.
                         Text(
-                            text = queuePosition(state),
-                            color = MUTED,
-                            fontSize = 11.sp,
+                            text = buildAnnotatedString {
+                                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                                    append(queueHere(state))
+                                }
+                                withStyle(SpanStyle(fontWeight = FontWeight.Light)) {
+                                    append("/" + queueTotal(state))
+                                }
+                            },
+                            color = TEXT,
+                            fontSize = 15.sp,
                             maxLines = 1,
                             style = TRIMMED.merge(TABULAR),
                         )

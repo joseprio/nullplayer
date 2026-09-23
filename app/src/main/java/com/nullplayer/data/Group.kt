@@ -59,7 +59,11 @@ data class Group(
          */
         const val FAVORITES_ID = "~favorites"
         const val FAVORITES_NAME = "Favorites"
-        val FAVORITES_COLOR = 0xFFFFC4FC.toInt()
+        /** The tile's colour: the heart's magenta, nearly half of the way to white. */
+        val FAVORITES_COLOR = 0xFFFF8DD9.toInt()
+
+        /** The heart's: the accent with its red and green swapped, as bright as the accent. */
+        val FAVORITES_HEART_COLOR = 0xFFFF30BA.toInt()
 
         /** Neither of the two standing tiles is a group, so neither can be edited or deleted. */
         fun isSynthetic(id: String): Boolean = id == VAULT_ID || id == FAVORITES_ID
