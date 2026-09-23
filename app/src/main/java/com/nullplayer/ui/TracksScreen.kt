@@ -373,7 +373,7 @@ private fun TrackRow(
                 .clickable { onToggleFavorite() },
             contentAlignment = Alignment.Center,
         ) {
-            // Plain white when it is set, rather than the tile's colour or the Favorites red: this
+            // Plain white when it is set, rather than the tile's colour or the Favorites magenta: this
             // row is read down a list where every other mark is either the accent or muted, and a
             // third colour on it would say something the heart does not mean.
             Glyph(

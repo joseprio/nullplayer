@@ -3,6 +3,7 @@ package com.nullplayer.playback
 import android.app.Application
 import android.content.ComponentName
 import android.database.ContentObserver
+import android.graphics.Bitmap
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
@@ -80,6 +81,16 @@ data class PlayerUiState(
     val vaultCount: Int = 0,
     /** Position in the queue, or -1 before anything has been chosen. */
     val trackIndex: Int = -1,
+    /**
+     * The current track's sleeve, once read, and which track it was read for.
+     *
+     * The id travels with the picture so that a track change never shows the last track's art
+     * under the new one's name for the beat it takes to read the new one: the screen checks the
+     * id against [currentTrack] and draws nothing while they disagree. Null with the setting
+     * off, and for a track with no picture in its tags.
+     */
+    val artwork: Bitmap? = null,
+    val artworkTrackId: String? = null,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
     /** The player is waiting on the file rather than playing it. */
@@ -96,8 +107,10 @@ data class PlayerUiState(
     val equalizerCurve: ParametricEq = ParametricEq(),
     /** Why the last pasted config was refused, or null if it was fine. */
     val autoEqError: String? = null,
-    /** How many tracks volume normalisation has yet to measure. */
+    /** How many tracks the background loudness analysis has yet to reach. */
     val unmeasuredTracks: Int = 0,
+    /** Whether this phone can vibrate with the music at all. Decides what the switch says. */
+    val hapticsSupported: Boolean = false,
     val importsInFlight: Int = 0,
     val lastImportFailures: Int = 0,
     val settings: AppSettings = AppSettings(),
@@ -244,7 +257,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         onIntrusion = ::onWebServerIntrusion,
     )
     private val audioManager = application.getSystemService(AudioManager::class.java)
-    private val loudness = LoudnessScanner(repository)
+    private val hapticsSupported = HapticSupport.available()
+    private val analysis = TrackScanner(repository)
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -320,6 +334,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         connectToService()
+        watchArtwork()
         viewModelScope.launch {
             repository.observeGroups().collect { groups ->
                 _state.update { it.copy(groups = groups) }
@@ -362,8 +377,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     // The very first list is not a switch — nothing was playing to carry over.
                     val switched = queuedGroupId != null && ordering.groupId != queuedGroupId
                     queuedGroupId = ordering.groupId
-                    _state.update { it.copy(tracks = tracks) }
+                    // The player is handed the queue first, and the state takes the list and
+                    // the index it landed on together. Published one at a time, the new list
+                    // stood under the old index for a frame: the readout said "13 of 1" on the
+                    // way from one tile to the next, and the heart answered for whichever
+                    // track happened to sit at that index in the new list before settling on
+                    // the right one. The controller reports the new index the moment it is
+                    // given the queue, so there is no need to wait for it to say so.
                     syncQueue(tracks, switched)
+                    _state.update {
+                        it.copy(
+                            tracks = tracks,
+                            trackIndex = controller?.currentMediaItemIndex ?: it.trackIndex,
+                        )
+                    }
                 }
         }
         viewModelScope.launch {
@@ -444,37 +471,39 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 _state.update { it.copy(equalizerCurve = curve) }
             }
         }
+        _state.update { it.copy(hapticsSupported = hapticsSupported) }
         viewModelScope.launch {
-            loudness.remaining.collect { pending ->
+            analysis.remaining.collect { pending ->
                 _state.update { it.copy(unmeasuredTracks = pending) }
             }
         }
         viewModelScope.launch {
-            // The measuring sweep, gated on the setting: decoding a whole library in the
-            // background is not something to do for a feature nobody has switched on, and the
-            // vault backfills itself the moment somebody does.
+            // The analysis sweep, over everything that has been imported. Not gated on either
+            // setting that reads its results: the results are facts about the files, they are
+            // wanted the moment either switch is turned on, and a library that has already been
+            // through the sweep is one that levels — or shakes — from the first track rather than
+            // some minutes later.
             //
             // The pending count is narrowed to "is there any" before it reaches here. Left as a
             // number it would re-emit after every single track, and `collectLatest` would cancel
             // the very sweep that produced the change.
             //
-            // The third term is what keeps the sweep out of the way. Measuring is decoding, and a
-            // decode running against the decode that is feeding the speaker is a contest the
+            // The second term is what keeps the sweep out of the way. Analysing is decoding, and
+            // a decode running against the decode that is feeding the speaker is a contest the
             // listener can hear — but only once the app is off screen, where the process is
             // scheduled on less than it had a moment ago. So the sweep runs whenever the app is
             // being looked at, and whenever nothing is playing, and pauses in the one case that
             // is neither. `collectLatest` stops it mid-track when that case arrives; the track is
-            // simply measured again next time, which the sweep already had to survive.
+            // simply analysed again next time, which the sweep already had to survive.
             combine(
-                settings.all.map { it.normalizingVolume }.distinctUntilChanged(),
-                loudness.remaining.map { it > 0 }.distinctUntilChanged(),
+                analysis.remaining.map { it > 0 }.distinctUntilChanged(),
                 combine(
                     onScreen,
                     _state.map { it.isPlaying }.distinctUntilChanged(),
                 ) { visible, playing -> visible || !playing },
-            ) { normalizing, pending, unobtrusive -> normalizing && pending && unobtrusive }
+            ) { pending, unobtrusive -> pending && unobtrusive }
                 .distinctUntilChanged()
-                .collectLatest { work -> if (work) loudness.drain() }
+                .collectLatest { work -> if (work) analysis.drain() }
         }
         readVolume()
         observeVolume()
@@ -507,6 +536,29 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 biometricsAvailable = Biometrics.available(context),
                 biometricsUnavailableReason = Biometrics.unavailableReason(context),
             )
+        }
+    }
+
+    /**
+     * Keeps the sleeve on the state in step with the track being stood on, while the setting
+     * asks for one.
+     *
+     * Keyed on the track's id and the switch, and nothing else: the state changes several times a
+     * second while music plays, and the file must not be reopened for a clock tick. `collectLatest`
+     * drops a read that is overtaken — skipping through the queue asks for a picture per stop,
+     * and only the last one is wanted. The reads themselves are not cached: a sleeve comes back
+     * in tens of milliseconds from a local file, and a cache would be one more place a picture
+     * lives after the switch is turned off.
+     */
+    private fun watchArtwork() {
+        viewModelScope.launch {
+            _state
+                .map { it.currentTrack?.id.takeIf { _ -> it.settings.showTrackInfo } }
+                .distinctUntilChanged()
+                .collectLatest { id ->
+                    val picture = id?.let { repository.artwork(it) }
+                    _state.update { it.copy(artwork = picture, artworkTrackId = id) }
+                }
         }
     }
 
@@ -785,6 +837,29 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * Make a tile the queue and start it, from the library's play button.
+     *
+     * The ribbon's swipe only selects; this selects and plays, because it is the one way to pick
+     * a tile once the ribbon has been switched off, and a tile picked from another screen is
+     * picked to be heard. The switch goes through settings and comes back as a flow, as in
+     * [playTrack], so the queue is waited for rather than assumed — and the wait is on the queue
+     * being that tile's rather than on any track in it, since which one it starts on is the
+     * tile's own business. Playing the tile already selected simply resumes it.
+     */
+    fun playGroup(id: String) {
+        viewModelScope.launch {
+            if (id != _state.value.activeGroupId) {
+                settings.setActiveGroup(id)
+                withTimeoutOrNull(QUEUE_SWITCH_MS) { _state.first { queuedGroupId == id } }
+            }
+            val player = controller ?: return@launch
+            if (player.mediaItemCount == 0) return@launch
+            start(player)
+            readPosition()
+        }
+    }
+
+    /**
      * Jump to a track by the number written on the hero readout, which counts from one.
      *
      * Whether the music is running carries across the jump untouched: this moves through the
@@ -1044,6 +1119,22 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { settings.setNormalizeVolume(normalize) }
     }
 
+    fun setCrossfeed(crossfeed: Boolean) {
+        viewModelScope.launch { settings.setCrossfeed(crossfeed) }
+    }
+
+    fun setCrossfeedStrength(strength: CrossfeedStrength) {
+        viewModelScope.launch { settings.setCrossfeedStrength(strength.ordinal) }
+    }
+
+    fun setHaptics(enabled: Boolean) {
+        viewModelScope.launch { settings.setHaptics(enabled) }
+    }
+
+    fun setCrossfeedHeadphonesOnly(only: Boolean) {
+        viewModelScope.launch { settings.setCrossfeedHeadphonesOnly(only) }
+    }
+
     /** A track and how far into it, as read back from the preferences at startup. */
     private data class ResumePoint(val trackId: String, val positionMs: Long)
 
@@ -1292,6 +1383,18 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { settings.setTileModes(groupId, modes) }
     }
 
+    fun setShowTrackInfo(show: Boolean) {
+        viewModelScope.launch { settings.setShowTrackInfo(show) }
+    }
+
+    fun setShowRibbon(show: Boolean) {
+        viewModelScope.launch { settings.setShowRibbon(show) }
+    }
+
+    fun setNotificationTrackInfo(show: Boolean) {
+        viewModelScope.launch { settings.setNotificationTrackInfo(show) }
+    }
+
     fun setShowSeeker(show: Boolean) {
         viewModelScope.launch { settings.setShowSeeker(show) }
     }
@@ -1397,6 +1500,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         if (lock) AppLock.unlockVault()
     }
 
+    fun setLockOnSettings(lock: Boolean) {
+        viewModelScope.launch { settings.setLockOnSettings(lock) }
+        // Thrown from the screen it guards, so the user is on the right side of it already; the
+        // prompt is owed on the next visit rather than this one.
+        if (lock) AppLock.unlockSettings()
+    }
+
     fun setRequireOutputDevice(require: Boolean) {
         viewModelScope.launch { settings.setRequireOutputDevice(require) }
     }
@@ -1416,7 +1526,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         controller?.release()
         controller = null
         webServer.stop()
-        loudness.release()
+        analysis.release()
         super.onCleared()
     }
 

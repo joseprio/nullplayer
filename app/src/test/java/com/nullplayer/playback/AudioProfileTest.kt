@@ -3,6 +3,8 @@ package com.nullplayer.playback
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -69,6 +71,24 @@ class AudioProfileTest {
             "WAV · 48 kHz · 24 bit",
             AudioProfile("WAV", lossless = true, sampleRateHz = 48_000, bits = 24).summary,
         )
+    }
+
+    @Test
+    fun `hi-res is lossless at 24 bits and 96 kHz or faster`() {
+        assertTrue(AudioProfile("FLAC", lossless = true, sampleRateHz = 96_000, bits = 24).hiRes)
+        assertTrue(AudioProfile("FLAC", lossless = true, sampleRateHz = 192_000, bits = 32).hiRes)
+    }
+
+    @Test
+    fun `hi-res needs both the depth and the rate`() {
+        assertFalse(AudioProfile("FLAC", lossless = true, sampleRateHz = 96_000, bits = 16).hiRes)
+        assertFalse(AudioProfile("FLAC", lossless = true, sampleRateHz = 48_000, bits = 24).hiRes)
+        assertFalse(AudioProfile("FLAC", lossless = true, bits = 24).hiRes)
+    }
+
+    @Test
+    fun `a lossy file is never hi-res whatever the decoder reports`() {
+        assertFalse(AudioProfile("AAC", lossless = false, sampleRateHz = 96_000, bits = 24).hiRes)
     }
 
     @Test

@@ -64,13 +64,19 @@ interface TrackDao {
     suspend fun maxSortIndex(): Int
 
     /**
-     * Everything still waiting to be measured, oldest arrival first.
+     * Everything still waiting to be measured for loudness, oldest arrival first.
      *
      * The whole list rather than a page of it: the sweep skips anything that failed to decode this
      * session, and a page could be filled entirely with those while measurable tracks sat behind
      * it.
      */
-    @Query("SELECT * FROM tracks WHERE loudnessLufs IS NULL ORDER BY addedAt ASC")
+    @Query(
+        """
+        SELECT * FROM tracks
+        WHERE loudnessLufs IS NULL
+        ORDER BY addedAt ASC
+        """
+    )
     suspend fun unmeasured(): List<Track>
 
     /**
@@ -80,7 +86,12 @@ interface TrackDao {
      * already found it cannot read — a count would leave the screen reporting work that is never
      * going to happen.
      */
-    @Query("SELECT id FROM tracks WHERE loudnessLufs IS NULL")
+    @Query(
+        """
+        SELECT id FROM tracks
+        WHERE loudnessLufs IS NULL
+        """
+    )
     fun observeUnmeasured(): Flow<List<String>>
 
     @Query("UPDATE tracks SET loudnessLufs = :lufs, peakAmplitude = :peak WHERE id = :id")

@@ -31,7 +31,7 @@ data class Group(
 
         /** The presets offered in the colour picker. */
         val PALETTE = listOf(
-            0xFF43B061.toInt(), // green
+            0xFF30FFBA.toInt(), // green
             0xFF3F82C8.toInt(), // blue
             0xFF8A63D2.toInt(), // violet
             0xFFD1568F.toInt(), // pink
@@ -59,7 +59,7 @@ data class Group(
          */
         const val FAVORITES_ID = "~favorites"
         const val FAVORITES_NAME = "Favorites"
-        val FAVORITES_COLOR = 0xFFCC4444.toInt()
+        val FAVORITES_COLOR = 0xFFFFC4FC.toInt()
 
         /** Neither of the two standing tiles is a group, so neither can be edited or deleted. */
         fun isSynthetic(id: String): Boolean = id == VAULT_ID || id == FAVORITES_ID

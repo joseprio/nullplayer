@@ -1,7 +1,7 @@
 # nullplayer
 
 An Android music player whose library lives in a private, encrypted vault, and whose screen never
-names a track — a VoiceOver button says it out loud instead.
+names a track — tapping where it would be says it out loud instead.
 
 ## The idea
 
@@ -12,16 +12,20 @@ Three rules drive the whole design:
 2. **Titles and albums are never rendered where anyone else can see them.** Not on the player, not
    in the notification, not on a car head unit, not on a smartwatch. The exception is a vault's
    own screen — the one for managing what is on it, behind a biometric prompt by default —
-   because a library you cannot read is a library you cannot manage.
-3. **Everywhere else the information is still there when you want it** — spoken, once, by the
-   VoiceOver button.
+   because a library you cannot read is a library you cannot manage. (A setting can put the
+   sleeve and the title on the player too, for a phone that is nobody else's business; it is
+   off until asked for.)
+3. **Everywhere else the information is still there when you want it** — spoken, once, by
+   VoiceOver: a tap on the player's big number.
 
 ## Using it
 
 The player fills the screen rather than drawing a device in the middle of it. The vault ribbon and
 the progress bar stretch to whatever width there is, the control rows stay anchored at the bottom,
 and past a comfortable width — a landscape phone, a tablet, a freeform window — the whole thing
-splits into two columns instead of growing a band of empty space down the sides.
+splits into two columns — the ribbon stood upright down the left edge, one tile wide, and the
+controls taking everything to the right of it — instead of growing a band of empty space down the
+sides.
 
 The hero readout is a queue position and a clock, because a title is the one thing it may not be.
 
@@ -35,12 +39,12 @@ The hero readout is a queue position and a clock, because a title is the one thi
 | Repeat | Off → the whole vault → this track |
 | Timer | Stop playing after 15 / 30 / 45 / 60 / 90 minutes; badged with the minutes left |
 | Volume | Opens a slider in place, with a mute button that remembers the level |
-| Equalizer | Presets and per-band faders; the import icon takes an AutoEQ profile |
-| Top left | Speak the current track; hold for "track 4 of 96" and the length |
+| Equalizer | Presets and per-band faders; the import icon takes an AutoEQ profile. Crossfeed and volume normalization live here too |
+| The big number | Tap to speak the current track; hold for "track 4 of 96" and the length |
 | Vault ribbon | Under the top bar. Swipe to switch the queue; tap a tile to manage it |
 | Top left | The upload server; a red dot means somebody is connected. Its address once running |
 | Top right | The vaults, the equalizer, settings |
-| Bottom row | Shuffle, repeat, VoiceOver, volume, the sleep timer |
+| Bottom row | Tag, order, volume, the sleep timer |
 
 The ribbon is the only thing on the player that carries words, and it carries two: the tile's name
 and how much is on it. Both the item counts and the progress bar can be switched off in settings.
@@ -63,9 +67,9 @@ rather than to the library you never went through.
 
 Opening a vault is the only place the library can be managed, and the only screen that names
 anything. Rows carry the title, the artist, the album, the year and the length, and each one has
-a play button that starts that track and drops you back on the player. There is no VoiceOver
-button here — this screen already prints what it would read — so the player's remains the way to
-hear a track without looking.
+a play button that starts that track and drops you back on the player. VoiceOver is not offered
+here — this screen already prints what it would read — so the player's readout remains the way
+to hear a track without looking.
 
 Every row carries a checkbox, always: tagging and bulk deletion are what the screen is for, so the
 selection is standing rather than something to switch on first. Tapping a row body ticks it.
@@ -145,7 +149,7 @@ so an interrupted attempt starts again from a million.
 
 Reached from the gear in the player's top bar. Everything here can be left alone.
 
-**Biometrics.** Three independent locks, all backed by `BiometricPrompt` with device credential as
+**Biometrics.** Four independent locks, all backed by `BiometricPrompt` with device credential as
 the fallback:
 
 * *Unlock the app* — asked on launch, and again after thirty seconds in the background. The grace
@@ -158,10 +162,17 @@ the fallback:
   screens that name tracks and the only ones that can delete them, and there is no copy anywhere
   else. Like the app lock, it holds for the session and re-arms after thirty seconds in the
   background.
+* *Unlock settings* — asked before this screen opens. It is the lock on the other three: without
+  it, anyone holding the phone can walk in here and switch them off. Off by default, and it holds
+  and re-arms the same way the library lock does.
 
-Both switches grey out when nothing is enrolled, and a lock already switched on fails open if the
+The switches grey out when nothing is enrolled, and a lock already switched on fails open if the
 enrolment is later removed — a phone that could not authenticate would otherwise be a phone locked
 out of a vault with no export path.
+
+**Haptics.** *Feel the music* makes the phone vibrate with what it plays. How strongly follows
+the system's media vibration setting. The switch is disabled, and says why, on a phone whose
+audio has no haptic channels.
 
 **Audio output.** *Only play to headphones* refuses to start unless a private listening device is
 connected: any headset, or one particular device chosen from the list. Whatever is stored stays in
@@ -200,6 +211,31 @@ The preamp is not decoration. AutoEQ profiles boost far more often than they cut
 tallest peak first. A published `Preamp:` line is used as given; a curve typed in by hand gets one
 computed for it.
 
+**Crossfeed** is a third link in the same chain, behind the curve. A record is mixed on speakers,
+where each ear hears both channels — the far one a few decibels quieter below about 700 Hz,
+shadowed above it, and a couple of hundred microseconds late — and headphones take all of that
+away, which is what makes a hard-panned sixties mix tiring on them. `CrossfeedProcessor` puts it
+back with the Bauer arrangement bs2b made standard: one first-order low-pass per channel, whose
+passband delay is the head's width, fed across and subtracted from its own side by the same
+amount, so the middle of the image passes through untouched and only the difference between the
+sides is narrowed. The three strengths are bs2b's own — *Natural* at 700 Hz and 4.5 dB, *Chu Moy*
+at 6 dB, *Meier* at 650 Hz and 9.5 dB — and moving between them slides rather than steps. It rides
+the equalizer's switch like normalization does, does nothing to mono or surround, and by default
+steps out of the chain while nothing is plugged in, since on a speaker it would be narrowing an
+image the room has already collapsed. (Android reports Bluetooth speakers and Bluetooth headphones
+alike, which is what the *Only on headphones* switch is for.)
+
+**Haptics** are the platform's own `HapticGenerator` (Android 12+), an audio effect on the
+player's session that works out the vibration from the audio as it plays. Nothing is analysed or
+stored ahead of time. The effect writes into the haptic channels of the audio stream, so two
+things have to line up: the phone's audio path has to carry haptic channels
+(`AudioManager.isHapticPlaybackSupported()`), and the track has to be opened with them unmuted.
+Media3 has no switch for the second, so `HapticTracks` sets it on the `AudioTrack.Builder`
+Media3 hands over just before building. Flipping the switch mid-track seeks in place, so the
+sink opens a new track under the new setting. Few phones have haptic channels, and on those that
+do the channels belong to the built-in output, so output routed to Bluetooth or USB headphones
+will usually play without vibration.
+
 **The sleep timer** is not persisted. One that survived a force-stop and silently paused the music
 the next morning would be a bug, not a feature. `PlaybackService` holds the deadline and does the
 pausing, so it keeps counting with no Activity on screen.
@@ -214,9 +250,16 @@ for its language — picking one reads a line back so the choice can be judged b
 several hundred voices across every language they ship, so the list is filtered to the one the
 phone is set to; without that it is not a setting, it is a haystack.
 
-**The player** section has two switches, both on by default: *Show the seeker bar* hides the scrub
-bar and the times with it, and *Show item counts* drops the "12 items" line from the ribbon,
-leaving only names.
+**The player** section is where rule 2 can be bent, one switch per place. *Show track info*, off
+by default, puts the sleeve from the track's tags — read out of the encrypted file on demand,
+never stored apart from it — on the player with the title and artist under it, above the queue
+position, and the same three things on the mini player's strip. In landscape the sleeve takes a
+column of its own between the ribbon and the controls. *Name the track in the notification*, also
+off by default, does the same for the media session: the notification, the lock screen, and a
+watch or a car. Each changes its own place alone. *Show the ribbon* takes the tile carousel off
+the player, after which a tile is picked with the play button on its row in the library. The
+last two are on by default: *Show the seeker bar* hides the scrub bar and the times with it, and
+*Show item counts* drops the "12 items" line from the ribbon, leaving only names.
 
 **Pulling the headphones out** pauses, via `ACTION_AUDIO_BECOMING_NOISY`. ExoPlayer can do that
 pause itself, but the receiver in `PlaybackService` also spends the biometric unlock and cuts off
@@ -267,9 +310,12 @@ data/     Track + Group + TrackGroup + Room, VaultCrypto (Keystore + CTR),
 playback/ PlaybackService (MediaSessionService), PlayerViewModel, VoiceOver (TTS), RepeatMode,
           PlaybackGate (who may start the music), AudioOutputs (what is plugged in),
           AudioEffects (the equalizer's curve), EqualizerProcessor (the audio-path DSP),
+          GainProcessor (levelling), CrossfeedProcessor (headphones as speakers),
           Biquad (cookbook sections), ParametricEq + AutoEqParser (AutoEQ profiles),
+          TrackScan + TrackScanner (the background loudness sweep),
+          LoudnessMeter (LUFS), HapticEngine (the platform haptic generator),
           SleepTimer (the deadline)
-security/ Biometrics (the prompt), AppLock (is the app, or the vault, unlocked)
+security/ Biometrics (the prompt), AppLock (is the app, the vault, or settings unlocked)
 ui/       PlayerScreen, LibraryScreen (the vault and its groups), TracksScreen (one list),
           SettingsScreen, EqualizerScreen, ColorPicker, Panels, Glyphs (the drawn marks)
 web/      VaultWebServer (NanoHTTPD + PIN auth), WebServerController

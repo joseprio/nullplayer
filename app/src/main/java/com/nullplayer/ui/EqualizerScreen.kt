@@ -45,13 +45,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.nullplayer.playback.CrossfeedStrength
 import com.nullplayer.playback.EqualizerSpec
 import com.nullplayer.playback.ParametricEq
 import com.nullplayer.playback.PlayerUiState
+import com.nullplayer.playback.headphonesConnected
 
 /**
  * The equalizer.
@@ -66,9 +67,9 @@ import com.nullplayer.playback.PlayerUiState
  * the profile is listed where the faders would be — under the same heading, because it is the same
  * question answered a different way.
  *
- * Volume normalisation sits at the foot of the screen. It is not part of the curve — it needs no
- * bands — but it is the other half of what the app does to the sound on its way out, so the title
- * bar's switch governs it too: off means a file is heard as it was mastered, with nothing to
+ * Crossfeed and volume normalisation sit under the curve. Neither is part of it — they need no
+ * bands — but they are the rest of what the app does to the sound on its way out, so the title
+ * bar's switch governs them too: off means a file is heard as it was mastered, with nothing to
  * remember beyond the one switch.
  */
 @Composable
@@ -82,6 +83,9 @@ fun EqualizerScreen(
     onClearAutoEq: () -> Unit,
     onDismissAutoEqError: () -> Unit,
     onNormalizeVolume: (Boolean) -> Unit,
+    onCrossfeed: (Boolean) -> Unit,
+    onCrossfeedStrength: (CrossfeedStrength) -> Unit,
+    onCrossfeedHeadphonesOnly: (Boolean) -> Unit,
     onClose: () -> Unit,
     miniPlayer: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
@@ -90,6 +94,7 @@ fun EqualizerScreen(
     val loaded = state.settings.equalizerAutoEq
     val profileLoaded = loaded.isNotBlank()
     val active = state.settings.equalizerEnabled
+    val crossfeeding = active && state.settings.crossfeed
     // Anything there is to undo: a profile loaded, a preset chosen, or a fader moved off zero.
     val modified = profileLoaded ||
         state.settings.equalizerPreset >= 0 ||
@@ -202,6 +207,54 @@ fun EqualizerScreen(
                 }
             }
 
+            // Between the curve and the level: crossfeed is about where the sound sits, which
+            // is closer to the faders' question than to normalisation's.
+            item { SectionHeader("Headphones") }
+            item {
+                Panel {
+                    ToggleRow(
+                        title = "Crossfeed",
+                        subtitle = crossfeedStatus(
+                            active = active,
+                            enabled = state.settings.crossfeed,
+                            waiting = state.settings.crossfeedHeadphonesOnly &&
+                                !state.outputs.headphonesConnected,
+                        ),
+                        checked = state.settings.crossfeed,
+                        onCheckedChange = onCrossfeed,
+                        enabled = active,
+                    )
+                }
+            }
+            // The strength and the headphones rule only mean anything once crossfeed is on, so
+            // like the presets under a loaded profile they step out of the way until it is.
+            if (state.settings.crossfeed) {
+                item {
+                    val chosen = CrossfeedStrength.ofOrdinal(state.settings.crossfeedStrengthOrdinal)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(CrossfeedStrength.entries) { strength ->
+                            Chip(
+                                label = strength.label,
+                                selected = strength == chosen,
+                                enabled = crossfeeding,
+                                onClick = { onCrossfeedStrength(strength) },
+                            )
+                        }
+                    }
+                }
+                item {
+                    Panel {
+                        ToggleRow(
+                            title = "Only on headphones",
+                            subtitle = "Bypassed while the phone's speaker is playing.",
+                            checked = state.settings.crossfeedHeadphonesOnly,
+                            onCheckedChange = onCrossfeedHeadphonesOnly,
+                            enabled = crossfeeding,
+                        )
+                    }
+                }
+            }
+
             item { SectionHeader("Volume normalization") }
             item {
                 Panel {
@@ -253,6 +306,20 @@ private fun normalizationStatus(active: Boolean, enabled: Boolean, unmeasured: I
     else -> "Play every track at the same loudness."
 }
 
+/**
+ * The line under the crossfeed switch.
+ *
+ * [waiting] is the case worth a line of its own: the switch is on and the sound is unchanged,
+ * because the phone is playing through its speaker and was asked not to bother. Without saying
+ * so, that reads as a setting that does nothing.
+ */
+private fun crossfeedStatus(active: Boolean, enabled: Boolean, waiting: Boolean): String = when {
+    !active -> "Needs the equalizer switched on."
+    enabled && waiting -> "Waiting for headphones."
+    enabled -> "Each side is heard a little in the other, as speakers in a room would be."
+    else -> "Soften the hard left-right split of headphones."
+}
+
 /** Where a profile is pasted. Text only — there is no picker for something that arrives copied. */
 @Composable
 private fun ImportDialog(
@@ -285,14 +352,14 @@ private fun ImportDialog(
                     textStyle = TextStyle(
                         color = TEXT,
                         fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = MonaSansMono,
                     ),
                     placeholder = {
                         Text(
                             text = PLACEHOLDER,
                             color = MUTED,
                             fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = MonaSansMono,
                         )
                     },
                     colors = OutlinedTextFieldDefaults.colors(
@@ -372,8 +439,8 @@ private fun LoadedProfile(curve: ParametricEq, enabled: Boolean) {
                     "${formatDb(filter.gainDb)} dB   Q ${filter.q}",
                 color = MUTED,
                 fontSize = 11.sp,
-                fontFamily = FontFamily.Monospace,
                 maxLines = 1,
+                style = TABULAR,
             )
         }
         if (curve.filters.size > MAX_LISTED) {
@@ -420,8 +487,8 @@ private fun Faders(
                     text = decibels(level),
                     color = if (enabled) ACCENT else MUTED,
                     fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
                     maxLines = 1,
+                    style = TABULAR,
                 )
                 Spacer(Modifier.height(6.dp))
                 Fader(

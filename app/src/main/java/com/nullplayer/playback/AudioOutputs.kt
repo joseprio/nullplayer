@@ -28,6 +28,17 @@ data class AudioOutput(
     val isBuiltIn: Boolean,
 )
 
+/**
+ * Whether the music is going into someone's ears rather than into a room.
+ *
+ * Read off what is connected rather than off the track's own routing, which Media3 keeps to
+ * itself, on the strength of the rule Android's policy follows anyway: a headset plugged or
+ * paired is where media goes. The one thing it cannot tell is a Bluetooth speaker from Bluetooth
+ * headphones — the framework reports both as A2DP — which is what the setting that consults this
+ * has an off switch for.
+ */
+val List<AudioOutput>.headphonesConnected: Boolean get() = any { it.isHeadset }
+
 /** Reads, names and watches the set of connected audio outputs. */
 class AudioOutputs(context: Context) {
 

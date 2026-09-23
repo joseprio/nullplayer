@@ -107,6 +107,12 @@ data class AppSettings(
      * can delete the vault, and the vault is the one thing in the app with no copy anywhere else.
      */
     val lockOnDock: Boolean = true,
+    /**
+     * Ask for biometrics before the settings screen opens. Off by default, because it is the
+     * switch that makes the other three mean anything: a lock whose own switch is in the open is
+     * a lock anyone holding the phone can turn off.
+     */
+    val lockOnSettings: Boolean = false,
     /** Refuse to play unless [requiredDeviceKey] — or, when blank, any headset — is connected. */
     val requireOutputDevice: Boolean = false,
     val requiredDeviceKey: String = "",
@@ -140,6 +146,31 @@ data class AppSettings(
      * rather than two things to remember to turn off.
      */
     val normalizeVolume: Boolean = false,
+    /**
+     * Blend a little of each channel into the other, the way speakers in a room would.
+     *
+     * Headphones only in spirit — nothing here knows what is plugged in — and, like
+     * [normalizeVolume], honoured only while [equalizerEnabled] is on; see [crossfeeding].
+     */
+    val crossfeed: Boolean = false,
+    /** Stored as an ordinal of [com.nullplayer.playback.CrossfeedStrength]. */
+    val crossfeedStrengthOrdinal: Int = 0,
+    /**
+     * Leave crossfeed out of the chain while nothing is plugged in.
+     *
+     * On by default, because the effect is a statement about headphones: on the phone's own
+     * speaker, or a Bluetooth one, it narrows an image the room has already collapsed. Off is
+     * for whoever wants it on everything regardless, or whose headphones the phone cannot tell
+     * from a speaker.
+     */
+    val crossfeedHeadphonesOnly: Boolean = true,
+    /**
+     * Vibrate with the music, through the platform's haptic generator.
+     *
+     * Only ever honoured on a phone whose audio path carries haptic channels; elsewhere the
+     * switch is shown disabled.
+     */
+    val haptics: Boolean = false,
     /** Which tile the ribbon has selected. Blank is the whole vault. */
     val activeGroupId: String = "",
     /**
@@ -152,6 +183,28 @@ data class AppSettings(
      */
     val lastTrackId: String = "",
     val lastPositionMs: Long = 0L,
+    /**
+     * The album art, title and artist on the player.
+     *
+     * Off by default, because the player is built to name nothing: everywhere but the dock the
+     * track is only ever spoken. This is the one switch that changes that, and it changes it for
+     * the screen alone — the notification and whatever else reads the session stay anonymous.
+     */
+    val showTrackInfo: Boolean = false,
+    /**
+     * The title, artist and sleeve on the notification — and so on the lock screen, a watch, a
+     * car, and anything else that reads the media session. Its own switch rather than a part of
+     * [showTrackInfo]: the screen is in your hand and the notification is on the lock screen,
+     * and wanting one named is no reason to have the other named too.
+     */
+    val notificationTrackInfo: Boolean = false,
+    /**
+     * The ribbon of tiles across the top of the player.
+     *
+     * Off, the player is the one queue and nothing else; a tile is chosen from the library
+     * instead, which is why every row there has a play button.
+     */
+    val showRibbon: Boolean = true,
     val showSeeker: Boolean = true,
     /**
      * Which way the label on the right of the seeker reads: counting down to the end of the
@@ -187,6 +240,9 @@ data class AppSettings(
      */
     val normalizingVolume: Boolean get() = equalizerEnabled && normalizeVolume
 
+    /** Whether crossfeed is actually running, under the same master switch as [normalizingVolume]. */
+    val crossfeeding: Boolean get() = equalizerEnabled && crossfeed
+
     /**
      * How [tileId] plays, falling back to the app-wide pair for a tile never asked about.
      *
@@ -208,6 +264,7 @@ class Settings(private val context: Context) {
             lockOnLaunch = prefs[LOCK_ON_LAUNCH] ?: false,
             lockOnPlay = prefs[LOCK_ON_PLAY] ?: false,
             lockOnDock = prefs[LOCK_ON_DOCK] ?: true,
+            lockOnSettings = prefs[LOCK_ON_SETTINGS] ?: false,
             requireOutputDevice = prefs[REQUIRE_OUTPUT_DEVICE] ?: false,
             requiredDeviceKey = prefs[REQUIRED_DEVICE_KEY].orEmpty(),
             preferredDeviceKey = prefs[PREFERRED_DEVICE_KEY].orEmpty(),
@@ -219,9 +276,16 @@ class Settings(private val context: Context) {
             equalizerBands = decodeBands(prefs[EQ_BANDS]),
             equalizerAutoEq = prefs[EQ_AUTOEQ].orEmpty(),
             normalizeVolume = prefs[NORMALIZE_VOLUME] ?: false,
+            crossfeed = prefs[CROSSFEED] ?: false,
+            crossfeedStrengthOrdinal = prefs[CROSSFEED_STRENGTH] ?: 0,
+            crossfeedHeadphonesOnly = prefs[CROSSFEED_HEADPHONES_ONLY] ?: true,
+            haptics = prefs[HAPTICS] ?: false,
             activeGroupId = prefs[ACTIVE_GROUP].orEmpty(),
             lastTrackId = prefs[LAST_TRACK].orEmpty(),
             lastPositionMs = prefs[LAST_POSITION] ?: 0L,
+            showTrackInfo = prefs[SHOW_TRACK_INFO] ?: false,
+            notificationTrackInfo = prefs[NOTIFICATION_TRACK_INFO] ?: false,
+            showRibbon = prefs[SHOW_RIBBON] ?: true,
             showSeeker = prefs[SHOW_SEEKER] ?: true,
             showRemainingTime = prefs[SHOW_REMAINING_TIME] ?: true,
             showVaultCounts = prefs[SHOW_VAULT_COUNTS] ?: true,
@@ -245,6 +309,8 @@ class Settings(private val context: Context) {
     suspend fun setLockOnPlay(lock: Boolean) = put(LOCK_ON_PLAY, lock)
 
     suspend fun setLockOnDock(lock: Boolean) = put(LOCK_ON_DOCK, lock)
+
+    suspend fun setLockOnSettings(lock: Boolean) = put(LOCK_ON_SETTINGS, lock)
 
     suspend fun setRequireOutputDevice(require: Boolean) = put(REQUIRE_OUTPUT_DEVICE, require)
 
@@ -278,6 +344,15 @@ class Settings(private val context: Context) {
 
     suspend fun setNormalizeVolume(normalize: Boolean) = put(NORMALIZE_VOLUME, normalize)
 
+    suspend fun setCrossfeed(crossfeed: Boolean) = put(CROSSFEED, crossfeed)
+
+    suspend fun setCrossfeedStrength(ordinal: Int) = put(CROSSFEED_STRENGTH, ordinal)
+
+    suspend fun setCrossfeedHeadphonesOnly(only: Boolean) = put(CROSSFEED_HEADPHONES_ONLY, only)
+
+    suspend fun setHaptics(haptics: Boolean) = put(HAPTICS, haptics)
+
+
     suspend fun setEqualizerBands(bands: List<Int>) =
         put(EQ_BANDS, bands.joinToString(","))
 
@@ -288,6 +363,12 @@ class Settings(private val context: Context) {
         it[LAST_TRACK] = trackId
         it[LAST_POSITION] = positionMs
     }
+
+    suspend fun setShowTrackInfo(show: Boolean) = put(SHOW_TRACK_INFO, show)
+
+    suspend fun setNotificationTrackInfo(show: Boolean) = put(NOTIFICATION_TRACK_INFO, show)
+
+    suspend fun setShowRibbon(show: Boolean) = put(SHOW_RIBBON, show)
 
     suspend fun setShowSeeker(show: Boolean) = put(SHOW_SEEKER, show)
 
@@ -318,6 +399,7 @@ class Settings(private val context: Context) {
         val LOCK_ON_LAUNCH = booleanPreferencesKey("lock_on_launch")
         val LOCK_ON_PLAY = booleanPreferencesKey("lock_on_play")
         val LOCK_ON_DOCK = booleanPreferencesKey("lock_on_dock")
+        val LOCK_ON_SETTINGS = booleanPreferencesKey("lock_on_settings")
         val REQUIRE_OUTPUT_DEVICE = booleanPreferencesKey("require_output_device")
         val REQUIRED_DEVICE_KEY = stringPreferencesKey("required_device_key")
         val PREFERRED_DEVICE_KEY = stringPreferencesKey("preferred_device_key")
@@ -328,10 +410,17 @@ class Settings(private val context: Context) {
         val EQ_BANDS = stringPreferencesKey("equalizer_bands")
         val EQ_AUTOEQ = stringPreferencesKey("equalizer_autoeq")
         val NORMALIZE_VOLUME = booleanPreferencesKey("normalize_volume")
+        val CROSSFEED = booleanPreferencesKey("crossfeed")
+        val CROSSFEED_STRENGTH = intPreferencesKey("crossfeed_strength")
+        val CROSSFEED_HEADPHONES_ONLY = booleanPreferencesKey("crossfeed_headphones_only")
+        val HAPTICS = booleanPreferencesKey("haptics")
         val TILE_MODES = stringPreferencesKey("tile_modes")
         val ACTIVE_GROUP = stringPreferencesKey("active_group")
         val LAST_TRACK = stringPreferencesKey("last_track")
         val LAST_POSITION = longPreferencesKey("last_position")
+        val SHOW_TRACK_INFO = booleanPreferencesKey("show_track_info")
+        val NOTIFICATION_TRACK_INFO = booleanPreferencesKey("notification_track_info")
+        val SHOW_RIBBON = booleanPreferencesKey("show_ribbon")
         val SHOW_SEEKER = booleanPreferencesKey("show_seeker")
         val SHOW_REMAINING_TIME = booleanPreferencesKey("show_remaining_time")
         val SHOW_VAULT_COUNTS = booleanPreferencesKey("show_vault_counts")

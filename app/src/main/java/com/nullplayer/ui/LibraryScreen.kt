@@ -24,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -53,13 +54,15 @@ import com.nullplayer.playback.RepeatMode
  * The vault, and the groups filed out of it.
  *
  * Tapping a row opens it. That is browsing, not selecting: the level-meter mark shows whichever
- * tile the player is drawing its queue from, and only the ribbon moves it, so looking inside a
- * group never stops music coming out of somewhere else.
+ * tile the player is drawing its queue from, and looking inside a group never stops music coming
+ * out of somewhere else. Moving the queue is the ribbon's job, or the play button on each row —
+ * which is the only way to do it once the ribbon has been switched off.
  */
 @Composable
 fun LibraryScreen(
     state: PlayerUiState,
     onOpenGroup: (String) -> Unit,
+    onPlayGroup: (String) -> Unit,
     onCreateGroup: () -> Unit,
     onUpdateGroup: (String, String, Int) -> Unit,
     onGroupModes: (String, TileModes) -> Unit,
@@ -90,6 +93,7 @@ fun LibraryScreen(
                     count = state.vaultCount,
                     playing = state.activeGroupId.isEmpty(),
                     onOpen = { onOpenGroup(Group.VAULT_ID) },
+                    onPlay = { onPlayGroup(Group.VAULT_ID) },
                     onEdit = null,
                 )
             }
@@ -131,6 +135,7 @@ fun LibraryScreen(
                     count = group.itemCount,
                     playing = group.id == state.activeGroupId,
                     onOpen = { onOpenGroup(group.id) },
+                    onPlay = { onPlayGroup(group.id) },
                     onEdit = { editingGroup = group },
                 )
             }
@@ -169,6 +174,7 @@ private fun LibraryRow(
     count: Int,
     playing: Boolean,
     onOpen: () -> Unit,
+    onPlay: () -> Unit,
     onEdit: (() -> Unit)?,
 ) {
     Row(
@@ -196,6 +202,20 @@ private fun LibraryRow(
         if (playing) {
             PlayingMark(colour)
             Spacer(Modifier.width(4.dp))
+        }
+        // An empty row has nothing to start, so it offers nothing: a play button that did
+        // nothing would be one the user has to press to find out.
+        if (count > 0) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onPlay() },
+                contentAlignment = Alignment.Center,
+            ) {
+                // Accented, as the vault screen's is: the one button here that leaves the screen.
+                Glyph(Icons.Filled.PlayArrow, ACCENT, contentDescription = "Play this", size = 21.dp)
+            }
         }
         // The slot means "manage what this row is", which for a group is renaming and recolouring
         // it. The vault is neither named nor coloured by anyone, so it has no slot: what stood

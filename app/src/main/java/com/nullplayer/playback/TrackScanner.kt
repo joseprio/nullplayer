@@ -12,29 +12,30 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 
-private const val TAG = "LoudnessScanner"
+private const val TAG = "TrackScanner"
 
 /**
- * The sweep that measures whatever has not been measured yet.
+ * The sweep that measures the loudness of whatever has not been measured yet.
  *
- * One track at a time, oldest first, with a pause between them. Measuring is decoding, so a vault
+ * One track at a time, oldest first, with a pause between them. Analysing is decoding, so a vault
  * of a few hundred tracks is a few minutes of work the phone would rather not do all at once —
  * and there is nothing to be gained by finishing sooner, because the results only matter to
  * tracks that have not been played yet.
  *
- * The queue is the database itself: a track with no loudness recorded is a track to measure. That
- * makes the sweep resumable for free — it survives being cancelled, being killed with the app, and
- * an import that lands halfway through, and it never measures the same file twice.
+ * The queue is the database itself: a track with no loudness recorded is a track to measure.
+ * That makes the sweep resumable for free: it survives being cancelled, being killed with the
+ * app, and an import that lands halfway through, and it never decodes the same file twice.
  */
-class LoudnessScanner(private val repository: VaultRepository) {
+class TrackScanner(private val repository: VaultRepository) {
 
     /**
      * Files that would not decode, remembered for as long as the app lives.
      *
      * Their loudness stays null in the database, because null is the truth and a made-up figure
      * would be applied to playback as though it had been measured. Held here instead, where it
-     * keeps the sweep from picking the same unreadable file up on every pass — and keeps the
-     * screen from counting it as work still to do.
+     * keeps the sweep from picking the same
+     * unreadable file up on every pass — and keeps the screen from counting it as work still to
+     * do.
      */
     private val skipped = MutableStateFlow<Set<String>>(emptySet())
 
@@ -42,8 +43,8 @@ class LoudnessScanner(private val repository: VaultRepository) {
      * The sweep's own thread, and deliberately a lowly one.
      *
      * `Dispatchers.Default` was the obvious home and the wrong one. Its threads run at the normal
-     * priority every other piece of app work gets, and measuring is not normal work: it is a
-     * decode of a whole track, sample by sample through the meter's filters, competing for the
+     * priority every other piece of app work gets, and analysing is not normal work: it is a
+     * decode of a whole track, sample by sample through the meters' filters, competing for the
      * same cores as the decode of the track being *listened to*. On screen that contest is invisible
      * — the foreground process has the big cores and clocks to spare. With the screen off it is
      * the same two jobs on a much smaller ration, and the one with a deadline is the one that
@@ -59,25 +60,25 @@ class LoudnessScanner(private val repository: VaultRepository) {
         Thread({
             Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
             work.run()
-        }, "loudness-sweep")
+        }, "analysis-sweep")
     }.asCoroutineDispatcher()
 
-    /** How many tracks are genuinely still to measure: the unmeasured, less the unreadable. */
+    /** How many tracks are genuinely still to analyse: the unanalysed, less the unreadable. */
     val remaining: Flow<Int> =
         combine(repository.observeUnmeasured(), skipped) { pending, unreadable ->
             pending.count { it !in unreadable }
         }
 
-    /** Runs until nothing is left to measure. Cancel it to stop between — or during — tracks. */
+    /** Runs until nothing is left to analyse. Cancel it to stop between — or during — tracks. */
     suspend fun drain() = withContext(sweepThread) {
         while (true) {
             val unreadable = skipped.value
             val next = repository.unmeasured().firstOrNull { it.id !in unreadable }
                 ?: return@withContext
-            val loudness = LoudnessScan.measure(repository.files.fileFor(next.id))
+            val loudness = TrackScan.measure(repository.files.fileFor(next.id))
             if (loudness == null) {
                 skipped.update { it + next.id }
-                Log.i(TAG, "Nothing to measure in ${next.id}")
+                Log.i(TAG, "Nothing to analyse in ${next.id}")
             } else {
                 repository.setLoudness(next.id, loudness.lufs, loudness.peak)
             }

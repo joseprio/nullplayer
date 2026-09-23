@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
@@ -49,9 +50,9 @@ private const val SYSTEM_DEFAULT = ""
 /**
  * Settings.
  *
- * Two of these switches can lock the user out of their own music — a biometric gate they cannot
- * pass, or a required device they have lost — so each one says, in its subtitle, exactly what it
- * will refuse and when.
+ * Several of these switches can lock the user out of their own music — a biometric gate they
+ * cannot pass, or a required device they have lost — so each one says, in its subtitle, exactly
+ * what it will refuse and when.
  */
 @Composable
 fun SettingsScreen(
@@ -60,6 +61,10 @@ fun SettingsScreen(
     onLockOnLaunch: (Boolean) -> Unit,
     onLockOnPlay: (Boolean) -> Unit,
     onLockOnDock: (Boolean) -> Unit,
+    onLockOnSettings: (Boolean) -> Unit,
+    onShowTrackInfo: (Boolean) -> Unit,
+    onShowRibbon: (Boolean) -> Unit,
+    onNotificationTrackInfo: (Boolean) -> Unit,
     onShowSeeker: (Boolean) -> Unit,
     onShowVaultCounts: (Boolean) -> Unit,
     onVoice: (String) -> Unit,
@@ -67,6 +72,7 @@ fun SettingsScreen(
     onRequireOutputDevice: (Boolean) -> Unit,
     onRequiredDevice: (String) -> Unit,
     onPreferredDevice: (String) -> Unit,
+    onHaptics: (Boolean) -> Unit,
     onClose: () -> Unit,
     miniPlayer: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
@@ -151,10 +157,25 @@ fun SettingsScreen(
                 Panel {
                     ToggleRow(
                         title = "Unlock the library",
-                        subtitle = "Ask before the dock opens. It is the only screen that names " +
-                            "tracks and the only one that can delete them.",
+                        subtitle = "Ask before the dock opens. It is the screen that lists every " +
+                            "track by name, and the only one that can delete them.",
                         checked = settings.lockOnDock,
                         onCheckedChange = onLockOnDock,
+                        enabled = state.biometricsAvailable,
+                    )
+                }
+            }
+
+            // Last of the four, because it is about the three above it: without this one, any of
+            // them can be switched off by whoever is holding the phone.
+            item {
+                Panel {
+                    ToggleRow(
+                        title = "Unlock settings",
+                        subtitle = "Ask before this screen opens, so the locks above cannot " +
+                            "simply be switched off.",
+                        checked = settings.lockOnSettings,
+                        onCheckedChange = onLockOnSettings,
                         enabled = state.biometricsAvailable,
                     )
                 }
@@ -163,6 +184,45 @@ fun SettingsScreen(
             // -- Player -----------------------------------------------------------------------
 
             item { SectionHeader("Player") }
+
+            // First in the section because it is the one switch here that changes what the app
+            // is, not how it looks: off, the player names nothing.
+            item {
+                Panel {
+                    ToggleRow(
+                        title = "Show track info",
+                        subtitle = "The album art, title and artist on the player and the " +
+                            "mini player.",
+                        checked = settings.showTrackInfo,
+                        onCheckedChange = onShowTrackInfo,
+                    )
+                }
+            }
+
+            item {
+                Panel {
+                    ToggleRow(
+                        title = "Name the track in the notification",
+                        subtitle = "The title, artist and album art on the notification and the " +
+                            "lock screen, and on anything else that reads the media session, " +
+                            "such as a watch or a car.",
+                        checked = settings.notificationTrackInfo,
+                        onCheckedChange = onNotificationTrackInfo,
+                    )
+                }
+            }
+
+            item {
+                Panel {
+                    ToggleRow(
+                        title = "Show the ribbon",
+                        subtitle = "The row of tiles across the top of the player. " +
+                            "Without it, a vault is chosen from the library.",
+                        checked = settings.showRibbon,
+                        onCheckedChange = onShowRibbon,
+                    )
+                }
+            }
 
             item {
                 Panel {
@@ -251,6 +311,29 @@ fun SettingsScreen(
                         subtitle = partSubtitle(part),
                         checked = part in settings.voiceParts,
                         onCheckedChange = { onVoicePart(part, it) },
+                    )
+                }
+            }
+
+            // -- Haptics ----------------------------------------------------------------------
+
+            item { SectionHeader("Haptics") }
+
+            item {
+                Panel {
+                    ToggleRow(
+                        title = "Feel the music",
+                        subtitle = if (state.hapticsSupported) {
+                            "The phone vibrates with what it plays, worked out from the audio " +
+                                "as it goes. How strongly follows the system's media vibration " +
+                                "setting."
+                        } else {
+                            "The phone vibrates with what it plays. This phone's audio has no " +
+                                "haptic channels to carry it."
+                        },
+                        checked = settings.haptics && state.hapticsSupported,
+                        onCheckedChange = onHaptics,
+                        enabled = state.hapticsSupported,
                     )
                 }
             }
@@ -450,3 +533,4 @@ private fun requirementSubtitle(settings: AppSettings, outputs: List<AudioOutput
     }
     return if (connected) "Connected. Playback will stop when it is unplugged." else "Not connected."
 }
+

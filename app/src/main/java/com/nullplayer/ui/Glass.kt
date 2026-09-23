@@ -31,12 +31,15 @@ import dev.chrisbanes.haze.hazeSource
 private val GLASS_BLUR = 24.dp
 
 /**
- * The panel colour, thinned, laid over the blur.
+ * The page colour, thinned, laid over the blur.
  *
- * Thin on purpose: every point of alpha spent here is a point of the blur behind it going unseen,
- * and on a near-black page there is little enough of it to show.
+ * The page's own black rather than the panel grey: tinted with the grey, every bar read as a
+ * strip of a different colour laid across the page, where the intent is a strip of the page
+ * itself that happens to blur what passes under it. Thin on purpose: every point of alpha spent
+ * here is a point of the blur behind it going unseen, and on a near-black page there is little
+ * enough of it to show.
  */
-private val GLASS_TINT = PANEL.copy(alpha = 0.45f)
+private val GLASS_TINT = BACKGROUND.copy(alpha = 0.28f)
 
 /**
  * A page whose bar floats over its content rather than sitting below it.

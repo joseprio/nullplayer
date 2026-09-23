@@ -1,6 +1,9 @@
 package com.nullplayer.ui
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -9,13 +12,18 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
@@ -26,12 +34,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.util.lerp
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.min
@@ -48,12 +58,31 @@ import kotlin.math.sin
  */
 typealias Glyph = DrawScope.(extent: Float, color: Color) -> Unit
 
+/** How far a button's glow reaches past its rim, as a share of the radius. */
+private const val GLOW_REACH = 0.25f
+
+/** How much a button shrinks under the finger. */
+private const val PRESSED_SCALE = 0.86f
+
+/** How long the play mark takes to become the pause mark, and back. */
+private const val MORPH_MS = 240
+
 /**
  * A round, tappable icon. [active] tints it with the accent, for the toggles that latch on.
  *
  * [enabled] false is a button that cannot be pressed at all. [unavailable] looks exactly the same
  * but still takes the press — for a control that is refused for a reason worth saying out loud,
  * where a dead button would leave the user guessing at what to fix.
+ *
+ * [glow] is a halo of that colour outside the rim, for the one button on a screen that ought to be
+ * found without looking. It reaches [GLOW_REACH] of the radius past the edge and is drawn before
+ * the clip, so it is the only part of a button that spills out of its circle.
+ *
+ * Under the finger the whole button shrinks to [PRESSED_SCALE] and a wash of its own colour comes
+ * up behind the mark, then both let go with the press. These buttons take their taps through a
+ * gesture detector rather than `clickable`, so nothing gives them a ripple for free. [pressReach]
+ * is the wash's radius as a share of the button's: more than one for a button whose mark nearly
+ * fills it, where a wash held inside the rim is lost behind the mark.
  */
 @Composable
 fun GlyphButton(
@@ -68,6 +97,8 @@ fun GlyphButton(
     unavailable: Boolean = false,
     tint: Color = TEXT,
     background: Color = Color.Transparent,
+    glow: Color = Color.Transparent,
+    pressReach: Float = 1f,
     onLongPress: (() -> Unit)? = null,
 ) {
     val colour by animateColorAsState(
@@ -79,14 +110,64 @@ fun GlyphButton(
         label = "glyph",
     )
 
+    val halo by animateColorAsState(targetValue = glow, label = "glow")
+
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) PRESSED_SCALE else 1f,
+        animationSpec = tween(if (pressed) 80 else 160, easing = FastOutSlowInEasing),
+        label = "press",
+    )
+    val wash by animateFloatAsState(
+        targetValue = if (pressed) 0.18f else 0f,
+        animationSpec = tween(if (pressed) 80 else 220),
+        label = "wash",
+    )
+
     Box(
         modifier = modifier
             .size(size)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .drawBehind {
+                val rim = this.size.minDimension / 2f
+                if (halo.alpha > 0f) {
+                    val reach = rim * (1f + GLOW_REACH)
+                    val edge = 1f / (1f + GLOW_REACH)
+                    // Solid out to the rim, where the disc covers it anyway, and for a band
+                    // beyond it, then falling away over what is left: the stop at the rim is
+                    // what keeps the fade from starting somewhere inside the button and reaching
+                    // the edge already half gone, and the band is what makes the glow read as a
+                    // ring with a short soft edge rather than a haze the button sits in.
+                    fun past(share: Float) = edge + (1f - edge) * share
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colorStops = arrayOf(
+                                0f to halo,
+                                past(0.2f) to halo,
+                                past(0.5f) to halo.copy(alpha = halo.alpha * 0.3f),
+                                1f to halo.copy(alpha = 0f),
+                            ),
+                            center = center,
+                            radius = reach,
+                        ),
+                        radius = reach,
+                        center = center,
+                    )
+                }
+                if (wash > 0f) {
+                    drawCircle(colour.copy(alpha = wash), radius = rim * pressReach, center = center)
+                }
+            }
             .clip(CircleShape)
             .background(background)
             .pointerInput(enabled, onClick, onLongPress) {
                 if (!enabled) return@pointerInput
                 detectTapGestures(
+                    onPress = {
+                        pressed = true
+                        tryAwaitRelease()
+                        pressed = false
+                    },
                     onTap = { onClick() },
                     onLongPress = onLongPress?.let { press -> { press() } },
                 )
@@ -120,11 +201,66 @@ val PlayGlyph: Glyph = { extent, color ->
     )
 }
 
-val PauseGlyph: Glyph = { extent, color ->
-    val barWidth = extent * 0.3f
+/**
+ * The play mark on its way to the pause mark: 0 is [PlayGlyph], 1 is the two bars.
+ *
+ * The triangle is cut along its middle into two halves, and each half is a bar in waiting: as
+ * [progress] runs, the apex splits and the halves straighten into a pair of stripes while the
+ * whole mark turns a quarter turn, so the stripes that were lying across the triangle end up
+ * standing. Each half is a four-cornered shape throughout — the apex simply counts twice at the
+ * start — which is what lets the corners slide rather than jump.
+ *
+ * The halves overlap by a hair at the start and are drawn as one path, so the cut never shows
+ * as a seam through the triangle.
+ */
+fun playPauseGlyph(progress: Float): Glyph = { extent, color ->
+    val p = progress.coerceIn(0f, 1f)
+    val bar = extent * 0.3f
     val gap = extent * 0.26f
-    drawRect(color, Offset(-gap - barWidth, -extent), Size(barWidth, extent * 2))
-    drawRect(color, Offset(gap, -extent), Size(barWidth, extent * 2))
+    val apex = extent * 0.95f
+    val base = -extent * 0.7f
+    val overlap = extent * 0.02f * (1f - p)
+
+    // Each corner given as (start, end); the bars here lie flat, the turn below stands them up.
+    fun corner(sx: Float, sy: Float, ex: Float, ey: Float) =
+        Offset(lerp(sx, ex, p), lerp(sy, ey, p))
+
+    val path = Path().apply {
+        // Top half: base corner, apex, apex, cut edge -> the bar that ends on the right.
+        moveTo(corner(base, -extent, -extent, -gap - bar))
+        lineTo(corner(apex, 0f, extent, -gap - bar))
+        lineTo(corner(apex, 0f, extent, -gap))
+        lineTo(corner(base, overlap, -extent, -gap))
+        close()
+        // Bottom half: cut edge, apex, apex, base corner -> the bar that ends on the left.
+        moveTo(corner(base, -overlap, -extent, gap))
+        lineTo(corner(apex, 0f, extent, gap))
+        lineTo(corner(apex, 0f, extent, gap + bar))
+        lineTo(corner(base, extent, -extent, gap + bar))
+        close()
+    }
+    rotate(degrees = 90f * p, pivot = Offset.Zero) {
+        drawPath(path, color)
+    }
+}
+
+private fun Path.moveTo(point: Offset) = moveTo(point.x, point.y)
+private fun Path.lineTo(point: Offset) = lineTo(point.x, point.y)
+
+/**
+ * The play/pause mark for a button, animating between the two whenever [playing] changes.
+ *
+ * The state is read in the draw pass rather than here, so a frame of the morph costs a redraw of
+ * the button and not a recomposition of whatever is holding it.
+ */
+@Composable
+fun rememberPlayPauseGlyph(playing: Boolean): Glyph {
+    val progress = animateFloatAsState(
+        targetValue = if (playing) 1f else 0f,
+        animationSpec = tween(MORPH_MS, easing = FastOutSlowInEasing),
+        label = "playPause",
+    )
+    return { extent, color -> playPauseGlyph(progress.value)(extent, color) }
 }
 
 val NextGlyph: Glyph = { extent, color -> drawSkip(extent, color, forward = true) }
@@ -501,19 +637,11 @@ private fun DrawScope.drawShelf(extent: Float, color: Color) {
  * How far [drawListLines] reaches above and below its middle, per unit of the extent it is given.
  *
  * 0.62 out to the outer bar, plus the 0.11 its round cap adds on top of that. Stated rather than
- * measured by eye, because both badges are aligned against it: the arrow is drawn to it and the
- * play mark stands on it, so a wrong number here is two marks quietly out of true rather than one
- * obvious mistake.
+ * measured by eye, because the order mark's arrow is measured against it.
  */
 private const val LIST_HALF_HEIGHT = 0.73f
 
-/**
- * How big the list is drawn inside the two marks that badge it.
- *
- * One number for both, because the two buttons stand either side of the same readout: a list drawn
- * to two scales would make them two different marks at a glance, whatever the badge on each said.
- * It is also what makes them the same height, since each is exactly as tall as its list.
- */
+/** How big the list is drawn inside the mark that badges it, which is exactly as tall as its list. */
 private const val LIST_SCALE = 0.7f
 
 /**
@@ -522,7 +650,7 @@ private const val LIST_SCALE = 0.7f
  * This was the library mark before the shelf took that button, and it is kept because it is the
  * better host for a badge: the shelf is a solid block of ink with no corner to spare, where a
  * list of lines is mostly air and shortens towards the bottom right — which is exactly where
- * something has to go. The two marks below are the only callers.
+ * something has to go. The order mark below is the only caller.
  */
 private fun DrawScope.drawListLines(extent: Float, color: Color) {
     val stroke = extent * 0.22f
@@ -538,58 +666,48 @@ private fun DrawScope.drawListLines(extent: Float, color: Color) {
 }
 
 /**
- * A list with a play mark beside it: go to a track in the queue.
+ * A dial pad: go to a track by its number.
  *
- * The badge sits in the notch the shortening bars already leave open on the right, and stands on
- * the same line the bottom bar ends on. Level rather than hung below the corner: the list's foot
- * is the strongest horizontal in the mark, and a badge that crosses it reads as something stuck
- * on afterwards instead of as the last item in the list.
+ * The ten digits as a phone lays them out — three rows of three and the zero alone beneath — with
+ * the star and hash left off. Ten dots in that shape read as a keypad where a full grid of twelve
+ * read as a pattern, and it is the digits the button is for. Drawn taller than it is wide; the
+ * button is round and has the height to spare.
  */
-val GoToTrackGlyph: Glyph = { extent, color ->
-    val foot = extent * LIST_HALF_HEIGHT * LIST_SCALE
-    // The list is pushed right by as much as the badge is pulled in, so tucking the two closer
-    // together does not leave the whole mark sitting off-centre in its button.
-    translate(-extent * 0.21f, 0f) {
-        drawListLines(extent * LIST_SCALE, color)
-    }
-    // [PlayGlyph] is drawn about its own middle, so standing it on the foot is a matter of
-    // lifting its centre by its own half-height — which is also why shrinking it costs the
-    // alignment nothing.
-    val badge = extent * 0.28f
-    translate(extent * 0.72f, foot - badge) {
-        PlayGlyph(badge, color)
+val DialPadGlyph: Glyph = { extent, color ->
+    val dot = extent * 0.2f
+    val across = extent * 0.72f
+    val down = extent * 0.62f
+    for (row in 0..3) {
+        val y = (row - 1.5f) * down
+        val columns = if (row == 3) 0..0 else -1..1
+        for (column in columns) drawCircle(color, dot, Offset(column * across, y))
     }
 }
 
 /**
- * A list with an arrow falling beside it: lay the queue out in some other order.
+ * A list with a two-headed arrow standing beside it: lay the queue out in some other order.
  *
- * The arrow is drawn to the list's height, top and bottom, rather than to the button's. The two
- * are a pair being read together, and an arrow that overshot the thing it is sorting stopped
- * looking like a mark *about* the list and started looking like a second mark that happened to be
- * standing next to one. It is struck at the bars' own weight for the same reason.
+ * The arrow is drawn a little taller than the list, top and bottom, and struck at the bars' own
+ * weight: the two are a pair being read together, and an arrow that overshot the thing it is
+ * sorting by much stopped looking like a mark *about* the list and started looking like a second
+ * mark that happened to be standing next to one. Its heads are only wide down at the ends, where
+ * the bars have already run out, so the list gives up less width to it than the drawing suggests.
  *
- * Its head is only wide down at the foot, where the bars have already run out, so the list gives
- * up less width to it than the drawing suggests.
- *
- * Which way it points is the one thing the mark reports about the tile it stands for: down for a
- * list running the way its order runs, up for one running backwards. That is the only state worth
- * a glance here — *which* order was chosen takes four words to say and belongs in the dialog.
+ * A head at each end rather than one: the button opens a dialog where the order is chosen, and
+ * the mark says "this can be sorted either way" rather than reporting which way it currently is.
+ * *Which* order was chosen takes four words to say and belongs in the dialog.
  */
-val OrderByGlyph: Glyph = { extent, color -> drawOrderedList(extent, color, up = false) }
-
-/** [OrderByGlyph] with the arrow turned over, for a tile whose order is reversed. */
-val OrderByUpGlyph: Glyph = { extent, color -> drawOrderedList(extent, color, up = true) }
-
-private fun DrawScope.drawOrderedList(extent: Float, color: Color, up: Boolean) {
-    translate(-extent * 0.28f, 0f) {
+val OrderByGlyph: Glyph = { extent, color ->
+    // The list is pushed left by as much as the arrow is pushed right, so the air between the
+    // two opens up without the whole mark sliding off-centre in its button.
+    translate(-extent * 0.38f, 0f) {
         drawListLines(extent * LIST_SCALE, color)
     }
     val stroke = extent * 0.22f * LIST_SCALE
     // The shaft stops half a stroke short at each end, because its round caps spend that half
-    // getting to the list's own edge.
-    val reach = extent * LIST_HALF_HEIGHT * LIST_SCALE - stroke / 2f
-    val x = extent * 0.76f
+    // getting to the arrow's own edge.
+    val reach = extent * ORDER_ARROW_HALF_HEIGHT - stroke / 2f
+    val x = extent * 0.86f
     // The head is set off the shaft rather than off the arrow's length, so it stays a head on a
     // line instead of growing back into a triangle with a tail when the list is drawn larger.
     val wing = extent * 0.32f * LIST_SCALE
@@ -600,21 +718,27 @@ private fun DrawScope.drawOrderedList(extent: Float, color: Color, up: Boolean) 
         strokeWidth = stroke,
         cap = StrokeCap.Round,
     )
-    // Which end carries the head is the whole of the difference between the two marks. The shaft
-    // is symmetrical, so turning the arrow over costs neither height nor width, and the button
-    // does not shift under the thumb when the toggle is thrown.
-    val tip = if (up) -reach else reach
-    val back = if (up) -wing else wing
-    drawPath(
-        path = Path().apply {
-            moveTo(x - wing, tip - back)
-            lineTo(x, tip)
-            lineTo(x + wing, tip - back)
-        },
-        color = color,
-        style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round),
-    )
+    listOf(-1f, 1f).forEach { direction ->
+        val tip = reach * direction
+        val back = wing * direction
+        drawPath(
+            path = Path().apply {
+                moveTo(x - wing, tip - back)
+                lineTo(x, tip)
+                lineTo(x + wing, tip - back)
+            },
+            color = color,
+            style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
+    }
 }
+
+/**
+ * How far the order mark's arrow reaches above and below its middle, per unit of extent: past
+ * the list's own [LIST_HALF_HEIGHT] (scaled by [LIST_SCALE]) by enough to be seen standing
+ * taller, and not by so much that it stops belonging to the list.
+ */
+private const val ORDER_ARROW_HALF_HEIGHT = 0.68f
 
 /**
  * Level meter bars: the tile the queue is being drawn from.

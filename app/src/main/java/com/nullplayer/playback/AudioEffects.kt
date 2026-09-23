@@ -20,7 +20,7 @@ data class EqualizerSpec(
 data class EqPreset(val name: String, val bands: List<Int>)
 
 /**
- * Everything the app does to the audio on its way out: the curve, and the level.
+ * Everything the app does to the audio on its way out: the curve, the level, and the width.
  *
  * The engine is [EqualizerProcessor], which lives in ExoPlayer's audio path — so unlike the system
  * effect this replaced, the bands are ours, the same everywhere, and there is no audio session to
@@ -36,6 +36,9 @@ data class EqPreset(val name: String, val bands: List<Int>)
  * one switch silences everything the app does to the sound. What it does need is a measurement —
  * see [Loudness] — which is why the gain it hands [GainProcessor] changes with the track rather
  * than only with the setting.
+ *
+ * Crossfeed is the third, and the simplest: a switch and a strength, handed straight to
+ * [CrossfeedProcessor], under the same master switch as the other two.
  */
 @UnstableApi
 object AudioEffects {
@@ -100,6 +103,8 @@ object AudioEffects {
 
     private var gain: GainProcessor? = null
 
+    private var crossfeed: CrossfeedProcessor? = null
+
     private var normalizing: Boolean = false
 
     /** What the track now playing measured, or null if it has never been measured. */
@@ -117,9 +122,10 @@ object AudioEffects {
 
     /** Called once, by the service that owns the player. */
     @Synchronized
-    fun attach(processor: EqualizerProcessor, gain: GainProcessor) {
+    fun attach(processor: EqualizerProcessor, gain: GainProcessor, crossfeed: CrossfeedProcessor) {
         this.processor = processor
         this.gain = gain
+        this.crossfeed = crossfeed
     }
 
     @Synchronized
@@ -128,6 +134,8 @@ object AudioEffects {
         processor = null
         gain?.setGain(1.0)
         gain = null
+        crossfeed?.set(enabled = false, strength = CrossfeedStrength.NATURAL)
+        crossfeed = null
     }
 
     /**
@@ -179,6 +187,14 @@ object AudioEffects {
 
     private fun pushGain() {
         gain?.setGain(gainFor(loudness))
+    }
+
+    // -- Crossfeed --------------------------------------------------------------------------
+
+    /** Switches crossfeed on or off, at a strength. Takes effect on the track already playing. */
+    @Synchronized
+    fun setCrossfeed(enabled: Boolean, strength: CrossfeedStrength) {
+        crossfeed?.set(enabled, strength)
     }
 
     /**

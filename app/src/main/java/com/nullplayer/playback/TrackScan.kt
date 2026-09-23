@@ -12,10 +12,10 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-private const val TAG = "LoudnessScan"
+private const val TAG = "TrackScan"
 
 /**
- * Measures one vault file, by decoding it.
+ * Analyses one vault file, by decoding it.
  *
  * There is no shortcut available. A tag can be read from a header, but loudness is a property of
  * the audio itself, so every sample has to be produced before it can be counted — which is the
@@ -27,7 +27,7 @@ private const val TAG = "LoudnessScan"
  * cancellation on every buffer, because the caller is a background sweep that has to stop the
  * moment it is told to.
  */
-internal object LoudnessScan {
+internal object TrackScan {
 
     /** Null when the file cannot be decoded, which the caller treats as "do not ask again". */
     suspend fun measure(file: File): Loudness? {
@@ -122,8 +122,8 @@ internal object LoudnessScan {
     }
 
     private fun meterFor(format: MediaFormat): LoudnessMeter = LoudnessMeter(
-        sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE),
-        channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
+        format.getInteger(MediaFormat.KEY_SAMPLE_RATE),
+        format.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
     )
 
     /**

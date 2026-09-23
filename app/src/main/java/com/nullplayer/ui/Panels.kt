@@ -38,7 +38,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -60,8 +59,10 @@ internal val PANEL = Color(0xFF141519)
 internal val LINE = Color(0xFF26272D)
 internal val TEXT = Color(0xFFE8E8EA)
 internal val MUTED = Color(0xFF8B8D94)
-internal val ACCENT = Color(0xFF43B061)
+internal val ACCENT = Color(0xFF30FFBA)
 internal val DANGER = Color(0xFFC8563F)
+/** For the small print under the readout, when the file is high-resolution. Gold, but quietly. */
+internal val HI_RES = Color(0xFFCFA84F)
 
 /**
  * Black or white, whichever is easier to read on [background].
@@ -284,7 +285,7 @@ internal fun Address(url: String, pin: String) {
             .background(BACKGROUND)
             .padding(14.dp)
     ) {
-        Text(url, color = ACCENT, fontSize = 17.sp, fontFamily = FontFamily.Monospace)
+        Text(url, color = ACCENT, fontSize = 17.sp, fontFamily = MonaSansMono)
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("PIN", color = MUTED, fontSize = 12.sp, letterSpacing = 1.sp)
@@ -293,8 +294,8 @@ internal fun Address(url: String, pin: String) {
                 text = pin,
                 color = TEXT,
                 fontSize = 17.sp,
-                fontFamily = FontFamily.Monospace,
                 letterSpacing = 3.sp,
+                style = TABULAR,
             )
         }
     }

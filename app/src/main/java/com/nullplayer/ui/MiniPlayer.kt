@@ -1,5 +1,6 @@
 package com.nullplayer.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,9 +24,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -33,6 +37,13 @@ import com.nullplayer.playback.PlayerUiState
 
 /** Long enough to press without aiming, short enough that four of them clear the pill. */
 private val MINI_BUTTON = 40.dp
+
+/**
+ * The sleeve's thumbnail: taller than a button, and nearly the strip's whole height. The strip
+ * is the one place the sleeve is seen while another screen is up, and at a button's size it read
+ * as one more button.
+ */
+private val MINI_ART = 50.dp
 
 /**
  * The skip marks get less of their button than the other glyphs get of theirs.
@@ -80,7 +91,9 @@ private val TRIMMED = TextStyle(
  *
  * It says which *tile* is playing rather than which track, in that tile's own colour — the same
  * pill the ribbon draws, so the thing you swiped to on the player is the thing you recognise here.
- * A track name would say more, and is the one thing this app never puts on a screen.
+ * A track name would say more, and is the one thing this app never puts on a screen — unless the
+ * "show track info" setting has asked for it, in which case the strip says what the player says:
+ * the sleeve, small, with the title and the artist beside it.
  *
  * The buttons are the player's own, on the player's terms: the same wrap-around skip, the same
  * refusals. Where the player greys a refused button and still takes the press — it has the caption
@@ -98,8 +111,6 @@ fun MiniPlayer(
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onScrub: (Long) -> Unit,
-    onVoiceOver: () -> Unit,
-    onVoiceOverLong: () -> Unit,
     onOpenPlayer: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -129,34 +140,43 @@ fun MiniPlayer(
                 // A minimum rather than a height: at a large font scale the pill is taller than
                 // this, and a strip that cannot grow would crop it.
                 .heightIn(min = 58.dp)
-                .padding(start = 16.dp, end = 6.dp),
+                .padding(start = if (state.settings.showTrackInfo) 10.dp else 16.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val naming = state.settings.showTrackInfo && state.currentTrack != null
             Row(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(10.dp))
                     .clickable(onClickLabel = "Open the player") { onOpenPlayer() }
-                    .padding(vertical = 6.dp),
+                    // The named strip spends its air on the thumbnail instead.
+                    .padding(vertical = if (naming) 2.dp else 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // The pill is the half that gives way: a long group name ellipsizes rather than
-                // pushing the position out of the strip, because the position is the shorter and
-                // the more precise of the two.
-                NowPlayingPill(
-                    name = state.activeName,
-                    colour = Color(state.activeColor),
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = queuePosition(state, separator = "/"),
-                    color = MUTED,
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    style = TRIMMED,
-                )
+                if (naming) {
+                    NowPlayingTrack(state)
+                } else {
+                    // The pill is the half that gives way: a long group name ellipsizes rather
+                    // than pushing the position out of the strip, because the position is the
+                    // shorter and the more precise of the two.
+                    NowPlayingPill(
+                        name = state.activeName,
+                        colour = Color(state.activeColor),
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // Nothing queued, no position: the player's readout steps aside on the same
+                    // terms, and "--/0" read as a leftover rather than a state.
+                    if (state.hasTracks) {
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            text = queuePosition(state),
+                            color = MUTED,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            style = TRIMMED.merge(TABULAR),
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.width(4.dp))
@@ -175,14 +195,15 @@ fun MiniPlayer(
                     glyphFraction = MINI_SKIP_GLYPH,
                 )
                 GlyphButton(
-                    glyph = if (state.isPlaying) PauseGlyph else PlayGlyph,
+                    glyph = rememberPlayPauseGlyph(state.isPlaying),
                     contentDescription = if (state.isPlaying) "Pause" else "Play",
                     onClick = onPlayPause,
                     enabled = !refused,
                     size = MINI_BUTTON,
                     glyphFraction = 0.30f,
-                    tint = if (refused) TEXT else BACKGROUND,
-                    background = if (refused) Color.Transparent else ACCENT,
+                    tint = ACCENT,
+                    background = if (refused) Color.Transparent else BACKGROUND,
+                    glow = if (refused) Color.Transparent else ACCENT.copy(alpha = 0.75f),
                 )
                 GlyphButton(
                     glyph = NextGlyph,
@@ -193,17 +214,51 @@ fun MiniPlayer(
                     size = MINI_BUTTON,
                     glyphFraction = MINI_SKIP_GLYPH,
                 )
-                GlyphButton(
-                    glyph = VoiceOverGlyph,
-                    contentDescription = "Announce the current track",
-                    onClick = onVoiceOver,
-                    onLongPress = onVoiceOverLong,
-                    active = state.isSpeaking,
-                    enabled = state.voiceOverRefusal == null,
-                    size = MINI_BUTTON,
-                    glyphFraction = 0.42f,
-                )
             }
+        }
+    }
+}
+
+/**
+ * What the player's readout says when it has been told to name the track: the sleeve at thumbnail
+ * size on the left, when the track has one, and the title over the artist beside it. Each line is
+ * one line, cut short rather than wrapped, since the strip's height is the buttons' and not the
+ * words'. The sleeve is only shown once it is this track's, as on the player, so a skip never
+ * shows the last track's picture beside the next one's name.
+ */
+@Composable
+private fun NowPlayingTrack(state: PlayerUiState) {
+    val track = state.currentTrack ?: return
+    val picture = state.artwork?.takeIf { state.artworkTrackId == track.id }
+    if (picture != null) {
+        Image(
+            bitmap = picture.asImageBitmap(),
+            contentDescription = "Album art",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.size(MINI_ART).clip(RoundedCornerShape(6.dp)),
+        )
+        Spacer(Modifier.width(8.dp))
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Text(
+            text = track.title ?: "Untitled",
+            color = TEXT,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = TRIMMED,
+        )
+        val artist = track.artist
+        if (artist != null) {
+            Text(
+                text = artist,
+                color = MUTED,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = TRIMMED,
+            )
         }
     }
 }

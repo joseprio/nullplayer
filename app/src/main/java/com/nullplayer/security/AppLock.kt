@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Whether the app itself has been unlocked, for as long as the process lives.
+ * Whether the app, the vault and settings have been unlocked, for as long as the process lives.
  *
  * Kept out of the ViewModel so a rotation does not re-prompt, and re-armed after a spell in the
  * background. The grace period exists because the two things the dock does — the system file
@@ -29,6 +29,14 @@ object AppLock {
     private val _vaultUnlocked = MutableStateFlow(false)
     val vaultUnlocked: StateFlow<Boolean> = _vaultUnlocked.asStateFlow()
 
+    /**
+     * Whether settings have been unlocked. A third flag rather than a share of [vaultUnlocked]:
+     * the two are separate switches, and passing the prompt for one screen must not quietly open
+     * the other.
+     */
+    private val _settingsUnlocked = MutableStateFlow(false)
+    val settingsUnlocked: StateFlow<Boolean> = _settingsUnlocked.asStateFlow()
+
     private var backgroundedAt = 0L
 
     fun unlock() {
@@ -37,6 +45,10 @@ object AppLock {
 
     fun unlockVault() {
         _vaultUnlocked.value = true
+    }
+
+    fun unlockSettings() {
+        _settingsUnlocked.value = true
     }
 
     fun onBackground() {
@@ -49,6 +61,7 @@ object AppLock {
         if (away != 0L && SystemClock.elapsedRealtime() - away > GRACE_MS) {
             _unlocked.value = false
             _vaultUnlocked.value = false
+            _settingsUnlocked.value = false
         }
     }
 }

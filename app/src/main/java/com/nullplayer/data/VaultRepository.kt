@@ -1,6 +1,8 @@
 package com.nullplayer.data
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -101,6 +103,72 @@ class VaultRepository(private val context: Context) {
     }
 
     suspend fun track(id: String): Track? = dao.byId(id)
+
+    /**
+     * The picture embedded in a track's tags, or null when it has none.
+     *
+     * Read out of the vault file on demand rather than kept alongside the row: nothing is
+     * written down that is not already inside the encrypted file, and the player only ever wants
+     * the one picture for the track it is standing on. The file is read the way the tags were at
+     * import, decrypted as it is seeked. Decoded no larger than [ARTWORK_MAX] on a side, since a
+     * scan of a sleeve can be several thousand pixels square and the screen shows a few hundred.
+     */
+    suspend fun artwork(id: String): Bitmap? = withContext(Dispatchers.IO) {
+        decodeArtwork(embeddedPicture(id) ?: return@withContext null)
+    }
+
+    /**
+     * The same picture as bytes the media session can carry: a JPEG no larger than
+     * [NOTIFICATION_ARTWORK] on a side. The session hands artwork to the notification, the lock
+     * screen and whatever else is listening as a byte array, and a scan straight out of the tags
+     * can run to megabytes that every one of them would then decode; this is a few tens of
+     * kilobytes, which is all a thumbnail on a lock screen can show.
+     */
+    suspend fun notificationArtwork(id: String): ByteArray? = withContext(Dispatchers.IO) {
+        val full = decodeArtwork(embeddedPicture(id) ?: return@withContext null)
+            ?: return@withContext null
+        val scale = NOTIFICATION_ARTWORK.toFloat() / maxOf(full.width, full.height)
+        val small = if (scale < 1f) {
+            Bitmap.createScaledBitmap(
+                full,
+                (full.width * scale).toInt().coerceAtLeast(1),
+                (full.height * scale).toInt().coerceAtLeast(1),
+                true,
+            )
+        } else {
+            full
+        }
+        java.io.ByteArrayOutputStream().use { out ->
+            small.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            out.toByteArray()
+        }
+    }
+
+    private fun embeddedPicture(id: String): ByteArray? {
+        val bytes = runCatching {
+            VaultMediaSource(files.fileFor(id)).use { reader ->
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(reader)
+                    retriever.embeddedPicture
+                } finally {
+                    retriever.release()
+                }
+            }
+        }.onFailure { Log.w(TAG, "Could not read artwork for $id", it) }.getOrNull()
+        return bytes
+    }
+
+    private fun decodeArtwork(bytes: ByteArray): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= ARTWORK_MAX) sample *= 2
+        return BitmapFactory.decodeByteArray(
+            bytes, 0, bytes.size,
+            BitmapFactory.Options().apply { inSampleSize = sample },
+        )
+    }
 
     /** Bytes on disk for a group, or for the whole vault when the group is blank. */
     suspend fun vaultBytes(groupId: String): Long = withContext(Dispatchers.IO) {
@@ -218,11 +286,11 @@ class VaultRepository(private val context: Context) {
             }
         }
 
-    // -- Loudness -----------------------------------------------------------------------------
+    // -- Analysis -----------------------------------------------------------------------------
 
     /**
-     * Everything that has never been measured. The sweep that drains this lives in
-     * [com.nullplayer.playback.LoudnessScanner], because measuring means decoding and decoding is
+     * Everything that has never been measured for loudness. The sweep that drains this lives in
+     * [com.nullplayer.playback.TrackScanner], because analysing means decoding and decoding is
      * the audio side's business.
      */
     suspend fun unmeasured(): List<Track> = withContext(Dispatchers.IO) { dao.unmeasured() }
@@ -374,5 +442,11 @@ class VaultRepository(private val context: Context) {
          * over; a larger buffer is the cheapest thing available here.
          */
         const val STREAM_BUFFER = 64 * 1024
+
+        /** The longest side artwork is decoded at: enough for the widest phone, and no more. */
+        const val ARTWORK_MAX = 1024
+
+        /** The longest side of the copy handed to the media session. */
+        const val NOTIFICATION_ARTWORK = 512
     }
 }

@@ -40,7 +40,7 @@ data class Loudness(
  * shelf that discounts everything under a couple of kilohertz and a high-pass that throws away the
  * rumble beneath hearing, both applied before any energy is counted.
  *
- * Fed by [LoudnessScan] one decoded buffer at a time, so a long track never has to be held in
+ * Fed by [TrackScan] one decoded buffer at a time, so a long track never has to be held in
  * memory at once. Not thread-safe, and not meant to be: one scan, one meter, one thread.
  */
 class LoudnessMeter(sampleRate: Int, channelCount: Int) {

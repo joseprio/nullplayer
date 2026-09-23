@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -50,6 +51,7 @@ import com.nullplayer.playback.PlayerViewModel
 import com.nullplayer.security.AppLock
 import com.nullplayer.security.Biometrics
 import com.nullplayer.ui.EqualizerScreen
+import com.nullplayer.ui.inMonaSans
 import com.nullplayer.ui.PlayerScreen
 import com.nullplayer.ui.SettingsScreen
 import com.nullplayer.ui.LibraryScreen
@@ -84,10 +86,12 @@ class MainActivity : FragmentActivity() {
             val state by viewModel.state.collectAsStateWithLifecycle()
             val unlocked by AppLock.unlocked.collectAsStateWithLifecycle()
             val vaultUnlocked by AppLock.vaultUnlocked.collectAsStateWithLifecycle()
+            val settingsUnlocked by AppLock.settingsUnlocked.collectAsStateWithLifecycle()
 
             var screen by rememberSaveable { mutableStateOf(Screen.PLAYER) }
             var lockMessage by rememberSaveable { mutableStateOf<String?>(null) }
             var askingForVault by rememberSaveable { mutableStateOf(false) }
+            var askingForSettings by rememberSaveable { mutableStateOf(false) }
             // Where the pending unlock is headed: null is the library, a tile id is that tile's
             // own screen. Both go through the same prompt, so it is one flag plus a destination
             // rather than two prompts that could race each other.
@@ -134,17 +138,22 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            // Both locks fail open when nothing is enrolled. A phone whose enrolment was removed
+            // Every lock fails open when nothing is enrolled. A phone whose enrolment was removed
             // after the switch went on would otherwise be locked out of its own vault, and there
             // is no export path to recover it from.
             val canLock = state.biometricsAvailable
             val locked = state.settingsLoaded && state.settings.lockOnLaunch && canLock && !unlocked
             val vaultLocked = state.settings.lockOnDock && canLock && !vaultUnlocked
+            val settingsLocked = state.settings.lockOnSettings && canLock && !settingsUnlocked
 
             // Checked while rendering, not only on the way in, so a restored instance state
-            // cannot land straight in the library without passing the prompt.
-            val guarded = screen == Screen.LIBRARY || screen == Screen.TRACKS
-            val visible = if (guarded && vaultLocked) Screen.PLAYER else screen
+            // cannot land straight in the library, or in settings, without passing the prompt.
+            val guarded = when (screen) {
+                Screen.LIBRARY, Screen.TRACKS -> vaultLocked
+                Screen.SETTINGS -> settingsLocked
+                else -> false
+            }
+            val visible = if (guarded) Screen.PLAYER else screen
 
             LaunchedEffect(locked) {
                 if (locked) askToUnlock { lockMessage = it }
@@ -189,7 +198,26 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            MaterialTheme(colorScheme = NullPlayerColors) {
+            LaunchedEffect(askingForSettings) {
+                if (askingForSettings) {
+                    Biometrics.authenticate(
+                        activity = this@MainActivity,
+                        title = "Unlock settings",
+                        subtitle = "The other locks are switched on and off here.",
+                        onSucceeded = {
+                            AppLock.unlockSettings()
+                            askingForSettings = false
+                            screen = Screen.SETTINGS
+                        },
+                        onFailed = {
+                            askingForSettings = false
+                            viewModel.onVaultAuthCancelled(it)
+                        },
+                    )
+                }
+            }
+
+            MaterialTheme(colorScheme = NullPlayerColors, typography = NullPlayerType) {
                 when {
                     // Nothing is drawn until the stored settings are in: the lock must not be
                     // something the user watches slide into place over the screen.
@@ -213,8 +241,6 @@ class MainActivity : FragmentActivity() {
                                 onNext = viewModel::next,
                                 onPrevious = viewModel::previous,
                                 onScrub = viewModel::scrub,
-                                onVoiceOver = viewModel::announceCurrentTrack,
-                                onVoiceOverLong = viewModel::announceQueuePosition,
                                 onOpenPlayer = { screen = Screen.PLAYER },
                                 modifier = glass,
                             )
@@ -272,7 +298,13 @@ class MainActivity : FragmentActivity() {
                                         screen = Screen.LIBRARY
                                     }
                                 },
-                                onOpenSettings = { screen = Screen.SETTINGS },
+                                onOpenSettings = {
+                                    if (settingsLocked) {
+                                        askingForSettings = true
+                                    } else {
+                                        screen = Screen.SETTINGS
+                                    }
+                                },
                             )
 
                             Screen.LIBRARY -> LibraryScreen(
@@ -281,6 +313,12 @@ class MainActivity : FragmentActivity() {
                                     tracksFromRibbon = false
                                     viewModel.openGroup(id)
                                     screen = Screen.TRACKS
+                                },
+                                // Playing a tile leaves the library for the player, as playing a
+                                // track leaves the vault screen: the button is a way out.
+                                onPlayGroup = { id ->
+                                    viewModel.playGroup(id)
+                                    screen = Screen.PLAYER
                                 },
                                 // Creating a group leaves you in the library: the new row appears
                                 // in the list you are already looking at, ready to be renamed.
@@ -316,7 +354,11 @@ class MainActivity : FragmentActivity() {
                                 onLockOnLaunch = viewModel::setLockOnLaunch,
                                 onLockOnPlay = viewModel::setLockOnPlay,
                                 onLockOnDock = viewModel::setLockOnDock,
+                                onLockOnSettings = viewModel::setLockOnSettings,
                                 onBlockScreenshots = viewModel::setBlockScreenshots,
+                                onShowTrackInfo = viewModel::setShowTrackInfo,
+                                onShowRibbon = viewModel::setShowRibbon,
+                                onNotificationTrackInfo = viewModel::setNotificationTrackInfo,
                                 onShowSeeker = viewModel::setShowSeeker,
                                 onShowVaultCounts = viewModel::setShowVaultCounts,
                                 onVoice = viewModel::setVoice,
@@ -324,6 +366,7 @@ class MainActivity : FragmentActivity() {
                                 onRequireOutputDevice = viewModel::setRequireOutputDevice,
                                 onRequiredDevice = viewModel::setRequiredDevice,
                                 onPreferredDevice = viewModel::setPreferredDevice,
+                                onHaptics = viewModel::setHaptics,
                                 onClose = { screen = Screen.PLAYER },
                                 miniPlayer = miniPlayer,
                             )
@@ -338,6 +381,9 @@ class MainActivity : FragmentActivity() {
                                 onClearAutoEq = viewModel::clearAutoEq,
                                 onDismissAutoEqError = viewModel::dismissAutoEqError,
                                 onNormalizeVolume = viewModel::setNormalizeVolume,
+                                onCrossfeed = viewModel::setCrossfeed,
+                                onCrossfeedStrength = viewModel::setCrossfeedStrength,
+                                onCrossfeedHeadphonesOnly = viewModel::setCrossfeedHeadphonesOnly,
                                 onClose = { screen = Screen.PLAYER },
                                 miniPlayer = miniPlayer,
                             )
@@ -436,7 +482,7 @@ private fun LockScreen(message: String?, onUnlock: () -> Unit) {
             Spacer(Modifier.height(28.dp))
             Text(
                 text = "Unlock",
-                color = ComposeColor(0xFF43B061),
+                color = ComposeColor(0xFF30FFBA),
                 fontSize = 15.sp,
                 modifier = Modifier
                     .clip(RoundedCornerShape(10.dp))
@@ -447,8 +493,10 @@ private fun LockScreen(message: String?, onUnlock: () -> Unit) {
     }
 }
 
+private val NullPlayerType = Typography().inMonaSans()
+
 private val NullPlayerColors = darkColorScheme(
-    primary = ComposeColor(0xFF43B061),
+    primary = ComposeColor(0xFF30FFBA),
     background = ComposeColor(0xFF0B0B0D),
     surface = ComposeColor(0xFF141519),
     onBackground = ComposeColor(0xFFE8E8EA),

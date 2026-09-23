@@ -6,10 +6,11 @@ import androidx.room.PrimaryKey
 /**
  * Everything the app knows about a track.
  *
- * These strings reach the screen in exactly one place, the dock, which is the screen for managing
- * the library and sits behind a biometric prompt by default. Everywhere else — the player, the
+ * These strings reach the screen in one place by default, the dock, which is the screen for
+ * managing the library and sits behind a biometric prompt. Everywhere else — the player, the
  * notification, a car head unit — they are only ever spoken, by
- * [com.nullplayer.playback.VoiceOver].
+ * [com.nullplayer.playback.VoiceOver]; the one exception is the player itself, once the "show
+ * track info" setting has asked for the title and artist there.
  */
 @Entity(tableName = "tracks")
 data class Track(

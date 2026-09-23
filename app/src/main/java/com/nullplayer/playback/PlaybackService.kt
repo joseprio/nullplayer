@@ -51,6 +51,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -66,6 +67,13 @@ class PlaybackService : MediaSessionService() {
     private lateinit var voiceOver: VoiceOver
     private lateinit var outputs: AudioOutputs
     private lateinit var settings: Settings
+
+    /**
+     * The haptic generator, on a phone that can play what it makes; null on one that cannot, and
+     * then the whole feature is absent rather than present and inert.
+     */
+    private var haptics: HapticEngine? = null
+    private val hapticTracks = HapticTracks()
 
     private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
 
@@ -90,6 +98,20 @@ class PlaybackService : MediaSessionService() {
     @Volatile
     private var sourceName: String = ""
 
+    /**
+     * The track playing, by id, as the listener reports it — a flow, so that the notification's
+     * naming can be recomputed for a track change and a setting change alike.
+     */
+    private val currentTrackId = MutableStateFlow<String?>(null)
+
+    /**
+     * The current track's real tags, or null while the notification is to stay anonymous. Read
+     * by [AnonymousPlayer] on every metadata request, so it is a field rather than a parameter.
+     */
+    private var revealed: MediaMetadata? = null
+
+    private lateinit var anonymousPlayer: AnonymousPlayer
+
     override fun onCreate() {
         super.onCreate()
 
@@ -106,13 +128,14 @@ class PlaybackService : MediaSessionService() {
 
         // The equalizer is a link in the audio chain now rather than an effect bolted onto a
         // session id, so it has to be handed to the renderers as the player is built. Volume
-        // normalisation is a second link in the same chain, for the same reason.
+        // normalisation and crossfeed are further links in the same chain, for the same reason.
         val equalizer = EqualizerProcessor()
         val gain = GainProcessor()
-        AudioEffects.attach(equalizer, gain)
+        val crossfeed = CrossfeedProcessor()
+        AudioEffects.attach(equalizer, gain, crossfeed)
 
         val exoPlayer = ExoPlayer.Builder(this)
-            .setRenderersFactory(EqualizedRenderers(this, equalizer, gain))
+            .setRenderersFactory(EqualizedRenderers(this, equalizer, gain, crossfeed, hapticTracks))
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(VaultDataSource.Factory(vault))
             )
@@ -129,14 +152,13 @@ class PlaybackService : MediaSessionService() {
             .build()
         player = exoPlayer
 
-        session = MediaSession.Builder(
-            this,
-            GuardedPlayer(
-                AnonymousPlayer(CircularPlayer(exoPlayer), getString(R.string.app_name)) {
-                    sourceName
-                }
-            )
+        anonymousPlayer = AnonymousPlayer(
+            player = CircularPlayer(exoPlayer),
+            fallback = getString(R.string.app_name),
+            source = { sourceName },
+            reveal = { revealed },
         )
+        session = MediaSession.Builder(this, GuardedPlayer(anonymousPlayer))
             .setCallback(VoiceOverCallback())
             .setCustomLayout(listOf(speakButton()))
             .setSessionActivity(
@@ -149,6 +171,10 @@ class PlaybackService : MediaSessionService() {
             )
             .build()
 
+        if (HapticSupport.available()) {
+            haptics = HapticEngine(exoPlayer, hapticTracks)
+        }
+
         exoPlayer.addListener(PlaybackTicket())
         exoPlayer.addAnalyticsListener(PlaybackDiagnostics())
         exoPlayer.addAnalyticsListener(FormatWatcher())
@@ -159,11 +185,14 @@ class PlaybackService : MediaSessionService() {
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         watchSource()
+        watchNotificationInfo()
         watchAudioPolicy()
         watchNotificationControls()
         watchSleepTimer()
         watchEqualizer()
         watchNormalization()
+        watchCrossfeed()
+        watchHaptics()
         watchVoice()
     }
 
@@ -178,6 +207,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         runCatching { unregisterReceiver(becomingNoisy) }
+        haptics?.release()
         AudioEffects.release()
         SleepTimer.cancel()
         voiceOver.release()
@@ -435,6 +465,45 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    /**
+     * Keeps [revealed] in step with the track and the setting, and tells the session when it
+     * has moved.
+     *
+     * The tags are read off the disk — the sleeve especially — so the answer lands a moment
+     * after the track changes, and the session, which read the metadata on the change itself,
+     * has to be told to read it again. `collectLatest` drops a read overtaken by the next track.
+     * Switching the setting off empties the field at once, before anything is read, so the
+     * notification goes anonymous on the same turn as the switch.
+     */
+    private fun watchNotificationInfo() {
+        scope.launch {
+            combine(
+                settings.all.map { it.notificationTrackInfo }.distinctUntilChanged(),
+                currentTrackId,
+            ) { named, id -> id.takeIf { named } }
+                .distinctUntilChanged()
+                .collectLatest { id ->
+                    revealed = null
+                    if (id != null) {
+                        val track = repository.track(id)
+                        if (track != null) {
+                            val builder = MediaMetadata.Builder()
+                                .setTitle(track.title)
+                                .setArtist(track.artist)
+                                .setAlbumTitle(track.album)
+                                .setIsBrowsable(false)
+                                .setIsPlayable(true)
+                            repository.notificationArtwork(id)?.let {
+                                builder.setArtworkData(it, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+                            }
+                            revealed = builder.build()
+                        }
+                    }
+                    anonymousPlayer.metadataChanged()
+                }
+        }
+    }
+
     private fun watchAudioPolicy() {
         scope.launch {
             PlaybackGate.state
@@ -492,6 +561,7 @@ class PlaybackService : MediaSessionService() {
         /** Every track brings its own level with it, so the gain is re-read on every change. */
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             applyLoudness(mediaItem?.mediaId)
+            currentTrackId.value = mediaItem?.mediaId
             // The position the old track reached is of no interest once it has been left.
             saveResumePoint()
             // Also from here, not only from the renderer: two files encoded identically produce
@@ -744,6 +814,38 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    /** Keeps the generator in step with the stored setting, where there is a generator to keep. */
+    private fun watchHaptics() {
+        val engine = haptics ?: return
+        scope.launch {
+            settings.all
+                .map { it.haptics }
+                .distinctUntilChanged()
+                .collect { engine.configure(it) }
+        }
+    }
+
+    /**
+     * Keeps crossfeed in step with the stored settings, under the equalizer's switch likewise —
+     * and with what is plugged in, when the setting says it should only run on headphones.
+     *
+     * The outputs come from the gate, which is already watching them for its own reasons; a
+     * second callback registered here would be told the same things a moment apart.
+     */
+    private fun watchCrossfeed() {
+        scope.launch {
+            combine(settings.all, PlaybackGate.state) { config, gate ->
+                val wearing = !config.crossfeedHeadphonesOnly || gate.outputs.headphonesConnected
+                CrossfeedConfig(
+                    enabled = config.crossfeeding && wearing,
+                    strength = CrossfeedStrength.ofOrdinal(config.crossfeedStrengthOrdinal),
+                )
+            }
+                .distinctUntilChanged()
+                .collect { AudioEffects.setCrossfeed(it.enabled, it.strength) }
+        }
+    }
+
     /**
      * Hands the gain stage the measurement for the track that just became current.
      *
@@ -774,6 +876,8 @@ class PlaybackService : MediaSessionService() {
         val bands: List<Int>,
     )
 
+    private data class CrossfeedConfig(val enabled: Boolean, val strength: CrossfeedStrength)
+
     /**
      * The stock renderers, with the equalizer spliced into the audio sink.
      *
@@ -784,6 +888,8 @@ class PlaybackService : MediaSessionService() {
         context: Context,
         private val equalizer: EqualizerProcessor,
         private val gain: GainProcessor,
+        private val crossfeed: CrossfeedProcessor,
+        private val hapticTracks: HapticTracks,
     ) : DefaultRenderersFactory(context) {
         override fun buildAudioSink(
             context: Context,
@@ -792,7 +898,9 @@ class PlaybackService : MediaSessionService() {
         ): AudioSink = DefaultAudioSink.Builder(context)
             // Normalisation first: a track pulled down to the target reaches the curve with room
             // for its boosts, where the same attenuation after the curve would arrive too late.
-            .setAudioProcessors(arrayOf(gain, equalizer))
+            // Crossfeed last: it only ever mixes the two sides of what it is given, so it can add
+            // nothing to a peak the curve has already clamped.
+            .setAudioProcessors(arrayOf(gain, equalizer, crossfeed))
             // Left off after measuring what turning it on actually does here.
             //
             // The sink offers an app's processors either 16-bit or float, never the source's own
@@ -807,6 +915,9 @@ class PlaybackService : MediaSessionService() {
             // rather than about what the processor can do, and it is one flag to flip on a
             // platform where that path behaves.
             .setEnableFloatOutput(false)
+            // Opens each track with its haptic channels unmuted when haptics are on; see
+            // [HapticTracks] for why this is the seam.
+            .setAudioTrackProvider(hapticTracks)
             .build()
     }
 
@@ -942,14 +1053,45 @@ class PlaybackService : MediaSessionService() {
      * tile the queue came from, and how far through it we are — are not titles, so they are safe
      * to say out loud, and they turn a notification that said only "nullplayer" into one that
      * answers "what am I listening to" as well as this app ever can.
+     *
+     * [reveal] is the one way round it: the setting that names the track in the notification.
+     * It answers with the track's real tags, read by the service rather than merged by
+     * ExoPlayer, so what the notification shows is what the dock shows and not whatever the
+     * stream's tags happened to contain.
      */
     private class AnonymousPlayer(
         player: Player,
         private val fallback: String,
         private val source: () -> String,
+        private val reveal: () -> MediaMetadata?,
     ) : ForwardingPlayer(player) {
 
+        /**
+         * Everyone listening to this player, kept so that [metadataChanged] can reach them.
+         * The session registers through [addListener], and the base class wraps and forwards
+         * what the wrapped player says; a change that only this class knows about — the tags
+         * arriving from disk — has to be announced from here.
+         */
+        private val listeners = java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
+
+        override fun addListener(listener: Player.Listener) {
+            listeners += listener
+            super.addListener(listener)
+        }
+
+        override fun removeListener(listener: Player.Listener) {
+            listeners -= listener
+            super.removeListener(listener)
+        }
+
+        /** Tells the session that what [getMediaMetadata] answers has changed. */
+        fun metadataChanged() {
+            val metadata = mediaMetadata
+            listeners.forEach { it.onMediaMetadataChanged(metadata) }
+        }
+
         override fun getMediaMetadata(): MediaMetadata {
+            reveal()?.let { return it }
             val builder = MediaMetadata.Builder()
                 .setTitle(source().ifBlank { fallback })
                 .setIsBrowsable(false)

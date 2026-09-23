@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [Track::class, Group::class, TrackGroup::class],
-    version = 5,
+    version = 7,
     exportSchema = true,
 )
 abstract class VaultDatabase : RoomDatabase() {
@@ -159,6 +159,36 @@ abstract class VaultDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Version 6 gives tracks somewhere to keep their haptic envelope.
+         *
+         * A table rather than a column, and empty to begin with: the analysis sweep reads a
+         * missing row as its work queue, the same way it reads a null loudness.
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS haptics (
+                        trackId TEXT NOT NULL PRIMARY KEY,
+                        version INTEGER NOT NULL,
+                        points BLOB NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
+        /**
+         * Version 7 takes the haptic envelopes out again: the platform's haptic generator works
+         * them out from the audio as it plays, so there is nothing left to store.
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS haptics")
+            }
+        }
+
         fun get(context: Context): VaultDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -167,7 +197,10 @@ abstract class VaultDatabase : RoomDatabase() {
                     // Lives under /data/data/<pkg>/databases, which no other app can read.
                     "vault.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(
+                        MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
+                        MIGRATION_6_7,
+                    )
                     .build()
                     .also { instance = it }
             }
