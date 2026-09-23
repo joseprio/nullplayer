@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
@@ -34,8 +35,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -325,7 +324,7 @@ fun TracksScreen(
  *
  * Led by its track number, set large enough to stand beside both lines of text. Tapping the row plays the
  * track, and a long press selects it. Once anything is selected, every row's three dots give way
- * to a radio button and a tap selects or deselects the row instead, so building a selection never
+ * to a selection ring and a tap selects or deselects the row instead, so building a selection never
  * starts the music by accident.
  *
  * Everything else a single track can have done to it sits behind the three dots, so the row reads
@@ -412,17 +411,22 @@ private fun TrackRow(
 
         Spacer(Modifier.width(4.dp))
         if (selecting) {
-            // The row itself takes the tap, so the radio is only the mark of it; its box matches
+            // Material's mark for a picked list item: an empty ring, filled with a check once
+            // picked. The row itself takes the tap, so this is only the mark of it; its box matches
             // the dots' so the title does not shift when a selection opens or closes.
             Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
-                RadioButton(
-                    selected = selected,
-                    onClick = null,
-                    colors = RadioButtonDefaults.colors(
-                        selectedColor = accent,
-                        unselectedColor = MUTED,
-                    ),
-                )
+                Box(
+                    modifier = Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(if (selected) accent else Color.Transparent)
+                        .border(2.dp, if (selected) accent else MUTED, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (selected) {
+                        Glyph(Icons.Filled.Check, BACKGROUND, size = 16.dp)
+                    }
+                }
             }
         } else Box {
             Box(
