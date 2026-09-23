@@ -2,6 +2,7 @@ package com.nullplayer.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,21 +19,23 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,6 +47,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -92,7 +99,9 @@ fun TracksScreen(
 
     var selection by remember { mutableStateOf(emptySet<String>()) }
     var pendingDelete by remember { mutableStateOf(emptyList<Track>()) }
-    var tagging by remember { mutableStateOf(false) }
+    // Who the tag sheet is for: the selection, from the bar, or one track, from its row's menu.
+    // Held as ids like the selection, so a track deleted under an open sheet drops out of it.
+    var tagging by remember { mutableStateOf(emptySet<String>()) }
 
     // A track deleted underneath us must not linger in the selection as a ghost id.
     val selected = tracks.filter { it.id in selection }
@@ -109,12 +118,14 @@ fun TracksScreen(
 
     GlassScaffold(
         topBar = { glass ->
-            // With a selection standing, the arrow drops it rather than leaving the screen, so a
-            // mis-tap on a long list costs one tap instead of the whole way back in. The system back
-            // gesture still leaves outright.
+            // With a selection standing, the arrow turns into a cross that drops it rather than
+            // leaving the screen, so a mis-tap on a long list costs one tap instead of the whole way
+            // back in. The system back gesture still leaves outright.
             ScreenHeader(
                 onBack = { if (selected.isNotEmpty()) leaveSelection() else onClose() },
                 modifier = glass,
+                backIcon = if (selected.isNotEmpty()) Icons.Filled.Close else Icons.AutoMirrored.Filled.ArrowBack,
+                backDescription = if (selected.isNotEmpty()) "Clear selection" else "Back",
             ) {
                 if (selected.isNotEmpty()) {
                     Text(
@@ -149,7 +160,7 @@ fun TracksScreen(
                         contentDescription = "Tag " + countedTracks(selected.size),
                         onClick = {
                             onReadSharedGroups(selected)
-                            tagging = true
+                            tagging = selected.map { it.id }.toSet()
                         },
                         size = 34.dp,
                         glyphFraction = 0.30f,
@@ -163,8 +174,8 @@ fun TracksScreen(
                         contentAlignment = Alignment.Center,
                     ) {
                         // The one mark on this screen that means something is about to be lost, so
-                        // it is the one that is coloured for it — and the same trash the rows carry,
-                        // because it does the same thing to more of them.
+                        // it is the one that is coloured for it — and the same trash the rows' menus
+                        // carry, because it does the same thing to more of them.
                         Glyph(
                             Icons.Filled.Delete,
                             DANGER,
@@ -242,11 +253,13 @@ fun TracksScreen(
                 }
             }
 
-            items(tracks, key = { track -> track.id }) { track ->
+            itemsIndexed(tracks, key = { _, track -> track.id }) { index, track ->
                 TrackRow(
                     track = track,
+                    position = index + 1,
                     accent = colour,
                     selected = track.id in selection,
+                    selecting = selected.isNotEmpty(),
                     onPlay = { onPlay(track) },
                     onToggle = {
                         selection = if (track.id in selection) {
@@ -256,18 +269,23 @@ fun TracksScreen(
                         }
                     },
                     onToggleFavorite = { onSetFavorite(track, !track.favorite) },
+                    onTag = {
+                        onReadSharedGroups(listOf(track))
+                        tagging = setOf(track.id)
+                    },
                     onDelete = { pendingDelete = listOf(track) },
                 )
             }
         }
     }
 
-    if (tagging) {
+    val tagged = tracks.filter { it.id in tagging }
+    if (tagged.isNotEmpty()) {
         TagDialog(
             state = state,
-            tracks = selected,
-            onApply = { groupIds, newGroup -> onApplyTags(selected, groupIds, newGroup) },
-            onDismiss = { tagging = false },
+            tracks = tagged,
+            onApply = { groupIds, newGroup -> onApplyTags(tagged, groupIds, newGroup) },
+            onDismiss = { tagging = emptySet() },
         )
     }
 
@@ -305,10 +323,13 @@ fun TracksScreen(
 /**
  * One track, named.
  *
- * The checkbox is always out because tagging and bulk deletion are the reasons this screen exists;
- * the row's own play and delete buttons are what keep a single track reachable without having to
- * select it first. Tapping the row body toggles the checkbox — the buttons carry everything else,
- * so the large target is spent on the common action.
+ * Led by its track number, set large enough to stand beside both lines of text. Tapping the row plays the
+ * track, and a long press selects it. Once anything is selected, every row's three dots give way
+ * to a radio button and a tap selects or deselects the row instead, so building a selection never
+ * starts the music by accident.
+ *
+ * Everything else a single track can have done to it sits behind the three dots, so the row reads
+ * as a name rather than a toolbar.
  *
  * There is no VoiceOver button here. This is the one screen that already prints the title, the
  * artist, the album and the year, so reading them aloud would say what is on the row anyway; the
@@ -317,34 +338,58 @@ fun TracksScreen(
 @Composable
 private fun TrackRow(
     track: Track,
+    position: Int,
     accent: Color,
     selected: Boolean,
+    selecting: Boolean,
     onPlay: () -> Unit,
     onToggle: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onTag: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    var menu by remember { mutableStateOf(false) }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
             .background(if (selected) accent.copy(alpha = 0.10f) else PANEL)
             .border(1.dp, if (selected) accent else LINE, RoundedCornerShape(10.dp))
-            .clickable { onToggle() }
-            .padding(horizontal = 14.dp, vertical = 11.dp),
+            // Tap gestures by hand rather than `combinedClickable`, which is still experimental in
+            // this Foundation — the same as the player's readout.
+            .pointerInput(selecting, onPlay, onToggle) {
+                detectTapGestures(
+                    onTap = { if (selecting) onToggle() else onPlay() },
+                    onLongPress = { onToggle() },
+                )
+            }
+            .semantics {
+                onClick(label = if (selecting) "Select" else "Play") {
+                    if (selecting) onToggle() else onPlay()
+                    true
+                }
+                onLongClick(label = "Select") {
+                    onToggle()
+                    true
+                }
+            }
+            .padding(start = 10.dp, end = 4.dp, top = 9.dp, bottom = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(18.dp)
-                .clip(CircleShape)
-                .background(if (selected) accent else Color.Transparent)
-                .border(1.dp, if (selected) accent else LINE, CircleShape),
+                .size(40.dp),
             contentAlignment = Alignment.Center,
         ) {
-            if (selected) {
-                Glyph(Icons.Filled.Check, BACKGROUND, contentDescription = null, size = 13.dp)
-            }
+            Text(
+                // A file with no track number in its tags falls back to where it sits in the list.
+                text = (track.trackNumber ?: position).toString(),
+                color = if (selected) accent else MUTED,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
         }
         Spacer(Modifier.width(12.dp))
 
@@ -365,48 +410,87 @@ private fun TrackRow(
             )
         }
 
-        Spacer(Modifier.width(6.dp))
-        Box(
-            modifier = Modifier
-                .size(34.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { onToggleFavorite() },
-            contentAlignment = Alignment.Center,
-        ) {
-            // Plain white when it is set, rather than the tile's colour or the Favorites magenta: this
-            // row is read down a list where every other mark is either the accent or muted, and a
-            // third colour on it would say something the heart does not mean.
-            Glyph(
-                if (track.favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                if (track.favorite) TEXT else MUTED,
-                contentDescription = if (track.favorite) {
-                    "Remove from favorites"
-                } else {
-                    "Add to favorites"
-                },
-                size = 19.dp,
-            )
-        }
-        Box(
-            modifier = Modifier
-                .size(34.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { onPlay() },
-            contentAlignment = Alignment.Center,
-        ) {
-            // Accented, because it is the one button here that leaves the screen.
-            Glyph(Icons.Filled.PlayArrow, accent, contentDescription = "Play", size = 21.dp)
-        }
-        Box(
-            modifier = Modifier
-                .size(34.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .clickable { onDelete() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Glyph(Icons.Filled.Delete, MUTED, contentDescription = "Delete", size = 19.dp)
+        Spacer(Modifier.width(4.dp))
+        if (selecting) {
+            // The row itself takes the tap, so the radio is only the mark of it; its box matches
+            // the dots' so the title does not shift when a selection opens or closes.
+            Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
+                RadioButton(
+                    selected = selected,
+                    onClick = null,
+                    colors = RadioButtonDefaults.colors(
+                        selectedColor = accent,
+                        unselectedColor = MUTED,
+                    ),
+                )
+            }
+        } else Box {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { menu = true },
+                contentAlignment = Alignment.Center,
+            ) {
+                Glyph(Icons.Filled.MoreVert, MUTED, contentDescription = "More", size = 20.dp)
+            }
+            DropdownMenu(
+                expanded = menu,
+                onDismissRequest = { menu = false },
+                containerColor = PANEL,
+                border = BorderStroke(1.dp, LINE),
+            ) {
+                // Plain white when it is set, rather than the tile's colour or the Favorites
+                // magenta: every other mark here is white, and a third colour would say something
+                // the heart does not mean.
+                TrackMenuItem(
+                    label = if (track.favorite) "Remove from favorites" else "Add to favorites",
+                    tint = TEXT,
+                    leading = {
+                        Glyph(
+                            if (track.favorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                            TEXT,
+                            size = 19.dp,
+                        )
+                    },
+                ) {
+                    menu = false
+                    onToggleFavorite()
+                }
+                TrackMenuItem(
+                    label = "Tag",
+                    tint = TEXT,
+                    leading = { GlyphMark(TagGlyph, TEXT, size = 24.dp) },
+                ) {
+                    menu = false
+                    onTag()
+                }
+                TrackMenuItem(
+                    label = "Delete",
+                    tint = DANGER,
+                    leading = { Glyph(Icons.Filled.Delete, DANGER, size = 19.dp) },
+                ) {
+                    menu = false
+                    onDelete()
+                }
+            }
         }
     }
+}
+
+/** One line of a row's menu, led by the same mark the action wears elsewhere in the app. */
+@Composable
+private fun TrackMenuItem(
+    label: String,
+    tint: Color,
+    leading: @Composable () -> Unit,
+    onClick: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(label, color = tint, fontSize = 14.sp) },
+        leadingIcon = { Box(Modifier.size(24.dp), contentAlignment = Alignment.Center) { leading() } },
+        onClick = onClick,
+    )
 }
 
 /** The second line: whatever the tags actually had, and how long it runs. */

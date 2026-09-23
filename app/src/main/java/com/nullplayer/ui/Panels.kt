@@ -61,7 +61,7 @@ internal val TEXT = Color(0xFFE8E8EA)
 internal val MUTED = Color(0xFF8B8D94)
 internal val ACCENT = Color(0xFF30FFBA)
 internal val DANGER = Color(0xFFC8563F)
-/** For the small print under the readout, when the file is high-resolution. Gold, but quietly. */
+/** For the small print under the readout, when the file is better than a CD. Gold, but quietly. */
 internal val HI_RES = Color(0xFFCFA84F)
 
 /**
@@ -133,6 +133,8 @@ internal fun ScreenHeader(title: String, onBack: () -> Unit, modifier: Modifier 
 internal fun ScreenHeader(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    backIcon: ImageVector = Icons.AutoMirrored.Filled.ArrowBack,
+    backDescription: String = "Back",
     content: @Composable RowScope.() -> Unit,
 ) {
     Row(
@@ -154,9 +156,9 @@ internal fun ScreenHeader(
             contentAlignment = Alignment.Center,
         ) {
             Glyph(
-                Icons.AutoMirrored.Filled.ArrowBack,
+                backIcon,
                 TEXT,
-                contentDescription = "Back",
+                contentDescription = backDescription,
                 size = 22.dp,
             )
         }
