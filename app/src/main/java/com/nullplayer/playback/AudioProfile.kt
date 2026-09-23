@@ -43,15 +43,16 @@ data class AudioProfile(
         }
 
     /**
-     * Whether the file clears the bar for high-resolution audio: lossless, at least 24 bits deep
-     * and sampled at 96 kHz or faster.
+     * Whether the file is better than a CD: lossless, and either deeper than 16 bits or sampled
+     * faster than 44.1 kHz. Either one is enough — a 24-bit master at 44.1 kHz and a 16-bit one at
+     * 96 kHz both carry something a CD cannot.
      *
      * Lossless is part of the test rather than assumed by the other two. A lossy file can carry
      * a high rate and come out of the decoder at 24 bits, and neither says anything about what
      * the encoder threw away on the way in.
      */
     val hiRes: Boolean
-        get() = lossless && (bits ?: 0) >= HI_RES_BITS && (sampleRateHz ?: 0) >= HI_RES_RATE_HZ
+        get() = lossless && ((bits ?: 0) > CD_BITS || (sampleRateHz ?: 0) > CD_RATE_HZ)
 
     private fun losslessDetail(): String? {
         val rate = sampleRateHz?.let { kiloHertz(it) }
@@ -94,8 +95,9 @@ data class AudioProfile(
         /** Stands in for a null across the session boundary, where a Bundle has no nullable Int. */
         private const val ABSENT = 0
 
-        private const val HI_RES_BITS = 24
-        private const val HI_RES_RATE_HZ = 96_000
+        /** Red Book, the CD's own format: what "better than CD" is measured against. */
+        private const val CD_BITS = 16
+        private const val CD_RATE_HZ = 44_100
 
         fun fromBundle(bundle: Bundle): AudioProfile? {
             val label = bundle.getString(KEY_LABEL) ?: return null

@@ -1050,7 +1050,7 @@ private fun Hero(
  * are listening to, and no more than that the rest of the time. It arrives a beat after the
  * track starts, so nothing is drawn until it does.
  *
- * Gold for a high-resolution file, which is the one fact in the line worth catching at a glance:
+ * Gold for a file better than a CD, which is the one fact in the line worth catching at a glance:
  * the line says what the file is, and the tint says it is rare.
  */
 @Composable
