@@ -206,6 +206,8 @@ data class AppSettings(
      */
     val showRibbon: Boolean = true,
     val showSeeker: Boolean = true,
+    /** The play button's glow swelling with the bass and the kick while the music plays. */
+    val pulseGlow: Boolean = true,
     /**
      * Which way the label on the right of the seeker reads: counting down to the end of the
      * track, or simply stating how long it is. Tapping it swaps the two.
@@ -287,6 +289,7 @@ class Settings(private val context: Context) {
             notificationTrackInfo = prefs[NOTIFICATION_TRACK_INFO] ?: false,
             showRibbon = prefs[SHOW_RIBBON] ?: true,
             showSeeker = prefs[SHOW_SEEKER] ?: true,
+            pulseGlow = prefs[PULSE_GLOW] ?: true,
             showRemainingTime = prefs[SHOW_REMAINING_TIME] ?: true,
             showVaultCounts = prefs[SHOW_VAULT_COUNTS] ?: true,
             voiceName = prefs[VOICE_NAME].orEmpty(),
@@ -372,6 +375,8 @@ class Settings(private val context: Context) {
 
     suspend fun setShowSeeker(show: Boolean) = put(SHOW_SEEKER, show)
 
+    suspend fun setPulseGlow(pulse: Boolean) = put(PULSE_GLOW, pulse)
+
     suspend fun setShowRemainingTime(show: Boolean) = put(SHOW_REMAINING_TIME, show)
 
     suspend fun setShowVaultCounts(show: Boolean) = put(SHOW_VAULT_COUNTS, show)
@@ -422,6 +427,7 @@ class Settings(private val context: Context) {
         val NOTIFICATION_TRACK_INFO = booleanPreferencesKey("notification_track_info")
         val SHOW_RIBBON = booleanPreferencesKey("show_ribbon")
         val SHOW_SEEKER = booleanPreferencesKey("show_seeker")
+        val PULSE_GLOW = booleanPreferencesKey("pulse_glow")
         val SHOW_REMAINING_TIME = booleanPreferencesKey("show_remaining_time")
         val SHOW_VAULT_COUNTS = booleanPreferencesKey("show_vault_counts")
         val VOICE_NAME = stringPreferencesKey("voice_name")

@@ -66,6 +66,7 @@ fun SettingsScreen(
     onShowRibbon: (Boolean) -> Unit,
     onNotificationTrackInfo: (Boolean) -> Unit,
     onShowSeeker: (Boolean) -> Unit,
+    onPulseGlow: (Boolean) -> Unit,
     onShowVaultCounts: (Boolean) -> Unit,
     onVoice: (String) -> Unit,
     onVoicePart: (VoicePart, Boolean) -> Unit,
@@ -231,6 +232,18 @@ fun SettingsScreen(
                         subtitle = "The scrub bar and the elapsed and remaining times.",
                         checked = settings.showSeeker,
                         onCheckedChange = onShowSeeker,
+                    )
+                }
+            }
+
+            item {
+                Panel {
+                    ToggleRow(
+                        title = "Pulse with the music",
+                        subtitle = "The play button's glow swells with the bass and the kick " +
+                            "while the music plays.",
+                        checked = settings.pulseGlow,
+                        onCheckedChange = onPulseGlow,
                     )
                 }
             }

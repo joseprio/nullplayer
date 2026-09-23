@@ -71,7 +71,10 @@ class HapticTracks : DefaultAudioSink.AudioTrackProvider {
         } else {
             null
         }
+        // Being the sink's one provider, this is also where the pulse learns which track is
+        // playing, to read what is being heard from it.
         return builder.getAudioTrack(config, audioAttributes, audioSessionId)
+            .also { MusicPulse.track = it }
     }
 }
 

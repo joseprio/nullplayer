@@ -132,10 +132,11 @@ class PlaybackService : MediaSessionService() {
         val equalizer = EqualizerProcessor()
         val gain = GainProcessor()
         val crossfeed = CrossfeedProcessor()
+        val pulse = PulseProcessor()
         AudioEffects.attach(equalizer, gain, crossfeed)
 
         val exoPlayer = ExoPlayer.Builder(this)
-            .setRenderersFactory(EqualizedRenderers(this, equalizer, gain, crossfeed, hapticTracks))
+            .setRenderersFactory(EqualizedRenderers(this, equalizer, gain, crossfeed, pulse, hapticTracks))
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(VaultDataSource.Factory(vault))
             )
@@ -889,6 +890,7 @@ class PlaybackService : MediaSessionService() {
         private val equalizer: EqualizerProcessor,
         private val gain: GainProcessor,
         private val crossfeed: CrossfeedProcessor,
+        private val pulse: PulseProcessor,
         private val hapticTracks: HapticTracks,
     ) : DefaultRenderersFactory(context) {
         override fun buildAudioSink(
@@ -899,8 +901,9 @@ class PlaybackService : MediaSessionService() {
             // Normalisation first: a track pulled down to the target reaches the curve with room
             // for its boosts, where the same attenuation after the curve would arrive too late.
             // Crossfeed last: it only ever mixes the two sides of what it is given, so it can add
-            // nothing to a peak the curve has already clamped.
-            .setAudioProcessors(arrayOf(gain, equalizer, crossfeed))
+            // nothing to a peak the curve has already clamped. The pulse after all of them, so it
+            // measures what is heard and counts the frames the track is given.
+            .setAudioProcessors(arrayOf(gain, equalizer, crossfeed, pulse))
             // Left off after measuring what turning it on actually does here.
             //
             // The sink offers an app's processors either 16-bit or float, never the source's own

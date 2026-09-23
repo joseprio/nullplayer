@@ -83,6 +83,12 @@ private const val MORPH_MS = 240
  * gesture detector rather than `clickable`, so nothing gives them a ripple for free. [pressReach]
  * is the wash's radius as a share of the button's: more than one for a button whose mark nearly
  * fills it, where a wash held inside the rim is lost behind the mark.
+ *
+ * [glowPulse] breathes the glow: read as it is drawn, so it can change every frame without the
+ * button being composed again. Half is the glow as it is without it; nothing dims it to a faint
+ * ring held close to the rim, and a full one sends it half as far again. It is the colour that
+ * saturates first and the reach that carries the rest, so a hit reads as the glow throwing
+ * itself outwards rather than as a lamp turned up.
  */
 @Composable
 fun GlyphButton(
@@ -100,6 +106,7 @@ fun GlyphButton(
     glow: Color = Color.Transparent,
     pressReach: Float = 1f,
     onLongPress: (() -> Unit)? = null,
+    glowPulse: (() -> Float)? = null,
 ) {
     val colour by animateColorAsState(
         targetValue = when {
@@ -130,9 +137,12 @@ fun GlyphButton(
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .drawBehind {
                 val rim = this.size.minDimension / 2f
-                if (halo.alpha > 0f) {
-                    val reach = rim * (1f + GLOW_REACH)
-                    val edge = 1f / (1f + GLOW_REACH)
+                val breath = glowPulse?.invoke() ?: 0.5f
+                val lit = halo.copy(alpha = halo.alpha * (0.4f + 1.2f * breath).coerceAtMost(1f))
+                if (lit.alpha > 0f) {
+                    val out = GLOW_REACH * (0.5f + breath)
+                    val reach = rim * (1f + out)
+                    val edge = 1f / (1f + out)
                     // Solid out to the rim, where the disc covers it anyway, and for a band
                     // beyond it, then falling away over what is left: the stop at the rim is
                     // what keeps the fade from starting somewhere inside the button and reaching
@@ -142,10 +152,10 @@ fun GlyphButton(
                     drawCircle(
                         brush = Brush.radialGradient(
                             colorStops = arrayOf(
-                                0f to halo,
-                                past(0.2f) to halo,
-                                past(0.5f) to halo.copy(alpha = halo.alpha * 0.3f),
-                                1f to halo.copy(alpha = 0f),
+                                0f to lit,
+                                past(0.2f) to lit,
+                                past(0.5f) to lit.copy(alpha = lit.alpha * 0.3f),
+                                1f to lit.copy(alpha = 0f),
                             ),
                             center = center,
                             radius = reach,

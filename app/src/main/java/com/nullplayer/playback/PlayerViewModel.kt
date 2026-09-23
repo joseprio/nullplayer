@@ -1399,6 +1399,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { settings.setShowSeeker(show) }
     }
 
+    fun setPulseGlow(pulse: Boolean) {
+        viewModelScope.launch { settings.setPulseGlow(pulse) }
+    }
+
     fun setShowVaultCounts(show: Boolean) {
         viewModelScope.launch { settings.setShowVaultCounts(show) }
     }

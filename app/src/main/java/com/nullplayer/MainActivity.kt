@@ -360,6 +360,7 @@ class MainActivity : FragmentActivity() {
                                 onShowRibbon = viewModel::setShowRibbon,
                                 onNotificationTrackInfo = viewModel::setNotificationTrackInfo,
                                 onShowSeeker = viewModel::setShowSeeker,
+                                onPulseGlow = viewModel::setPulseGlow,
                                 onShowVaultCounts = viewModel::setShowVaultCounts,
                                 onVoice = viewModel::setVoice,
                                 onVoicePart = viewModel::setVoicePart,
