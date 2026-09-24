@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Track::class, Group::class, TrackGroup::class],
-    version = 7,
+    entities = [Track::class, Group::class, TrackGroup::class, TrackBeats::class],
+    version = 8,
     exportSchema = true,
 )
 abstract class VaultDatabase : RoomDatabase() {
@@ -189,6 +189,25 @@ abstract class VaultDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Version 8 gives tracks somewhere to keep their beats. Empty to begin with, like the
+         * haptics table was: a missing row is the sweep's cue to analyse the track.
+         */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS beats (
+                        trackId TEXT NOT NULL PRIMARY KEY,
+                        version INTEGER NOT NULL,
+                        confidence REAL NOT NULL,
+                        beats BLOB NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         fun get(context: Context): VaultDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -199,7 +218,7 @@ abstract class VaultDatabase : RoomDatabase() {
                 )
                     .addMigrations(
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-                        MIGRATION_6_7,
+                        MIGRATION_6_7, MIGRATION_7_8,
                     )
                     .build()
                     .also { instance = it }

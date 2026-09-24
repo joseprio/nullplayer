@@ -206,6 +206,7 @@ fun MiniPlayer(
                     size = MINI_BUTTON,
                     glyphFraction = MINI_SKIP_GLYPH,
                 )
+                val pulse = rememberMusicPulse(state.settings.pulseGlow, state.isPlaying)
                 GlyphButton(
                     glyph = rememberPlayPauseGlyph(state.isPlaying),
                     contentDescription = if (state.isPlaying) "Pause" else "Play",
@@ -216,6 +217,7 @@ fun MiniPlayer(
                     tint = ACCENT,
                     background = if (refused) Color.Transparent else BACKGROUND,
                     glow = if (refused) Color.Transparent else ACCENT.copy(alpha = 0.75f),
+                    glowPulse = pulse?.let { { it.floatValue } },
                 )
                 GlyphButton(
                     glyph = NextGlyph,

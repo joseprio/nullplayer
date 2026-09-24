@@ -473,7 +473,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
         _state.update { it.copy(hapticsSupported = hapticsSupported) }
         viewModelScope.launch {
-            analysis.remaining.collect { pending ->
+            analysis.unmeasured.collect { pending ->
                 _state.update { it.copy(unmeasuredTracks = pending) }
             }
         }

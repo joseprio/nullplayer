@@ -97,6 +97,39 @@ interface TrackDao {
     @Query("UPDATE tracks SET loudnessLufs = :lufs, peakAmplitude = :peak WHERE id = :id")
     suspend fun setLoudness(id: String, lufs: Double, peak: Double)
 
+    /**
+     * Everything the sweep still has to decode for either reason: no loudness yet, or no beats
+     * from this [version] of the analysis. Oldest arrival first, and whole, as [unmeasured] is.
+     */
+    @Query(
+        """
+        SELECT * FROM tracks
+        WHERE loudnessLufs IS NULL
+           OR id NOT IN (SELECT trackId FROM beats WHERE version = :version)
+        ORDER BY addedAt ASC
+        """
+    )
+    suspend fun unanalysed(version: Int): List<Track>
+
+    /** The same queue, watched, as ids for the same reason as [observeUnmeasured]. */
+    @Query(
+        """
+        SELECT id FROM tracks
+        WHERE loudnessLufs IS NULL
+           OR id NOT IN (SELECT trackId FROM beats WHERE version = :version)
+        """
+    )
+    fun observeUnanalysed(version: Int): Flow<List<String>>
+
+    @Query("SELECT * FROM beats WHERE trackId = :id")
+    suspend fun beats(id: String): TrackBeats?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun setBeats(beats: TrackBeats)
+
+    @Query("DELETE FROM beats WHERE trackId = :id")
+    suspend fun deleteBeats(id: String)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(track: Track)
 

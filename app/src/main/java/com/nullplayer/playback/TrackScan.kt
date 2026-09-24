@@ -17,9 +17,11 @@ private const val TAG = "TrackScan"
 /**
  * Analyses one vault file, by decoding it.
  *
- * There is no shortcut available. A tag can be read from a header, but loudness is a property of
- * the audio itself, so every sample has to be produced before it can be counted — which is the
- * same work playing the track does, minus the waiting and minus the sink.
+ * There is no shortcut available. A tag can be read from a header, but loudness and beats are
+ * properties of the audio itself, so every sample has to be produced before it can be counted —
+ * which is the same work playing the track does, minus the waiting and minus the sink. The one
+ * decode feeds whichever of the two the track still needs, so a new import is decoded once for
+ * both.
  *
  * The file is read through [VaultMediaSource], the same decrypting reader the tag pass uses, so a
  * scan never puts a plaintext copy of a track anywhere: the bytes are deciphered into the
@@ -29,8 +31,11 @@ private const val TAG = "TrackScan"
  */
 internal object TrackScan {
 
+    /** What one decode found: each half null when it was not asked for. */
+    class Analysis(val loudness: Loudness?, val beats: Beats?)
+
     /** Null when the file cannot be decoded, which the caller treats as "do not ask again". */
-    suspend fun measure(file: File): Loudness? {
+    suspend fun analyse(file: File, loudness: Boolean, beats: Boolean): Analysis? {
         val source = VaultMediaSource(file)
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
@@ -49,7 +54,7 @@ internal object TrackScan {
                 configure(format, null, null, 0)
                 start()
             }
-            decode(extractor, codec)
+            decode(extractor, codec, loudness, beats)
         } catch (t: Throwable) {
             // A file that will not decode is not an error worth surfacing: it is already in the
             // vault, it may well still play on a device with a codec this one lacks, and the only
@@ -67,14 +72,19 @@ internal object TrackScan {
     /**
      * The decode loop: fill an input buffer from the extractor, take whatever comes out, repeat.
      *
-     * The meter cannot be built until the decoder has announced its output format, because the
-     * sample rate decides the filter coefficients and the channel count decides how many delay
-     * lines there are. That announcement always arrives before the first buffer, but the fallback
+     * The listeners cannot be built until the decoder has announced its output format, because
+     * the sample rate decides the filter coefficients and the channel count decides how many
+     * delay lines there are. That announcement always arrives before the first buffer, but the fallback
      * is here anyway rather than a null check that could silently measure nothing.
      */
-    private suspend fun decode(extractor: MediaExtractor, codec: MediaCodec): Loudness? {
+    private suspend fun decode(
+        extractor: MediaExtractor,
+        codec: MediaCodec,
+        loudness: Boolean,
+        beats: Boolean,
+    ): Analysis? {
         val info = MediaCodec.BufferInfo()
-        var meter: LoudnessMeter? = null
+        var meter: Listeners? = null
         var encoding = AudioFormat.ENCODING_PCM_16BIT
         var scratch = FloatArray(0)
         var inputDone = false
@@ -102,14 +112,14 @@ internal object TrackScan {
             val index = codec.dequeueOutputBuffer(info, TIMEOUT_US)
             if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 encoding = codec.outputFormat.pcmEncoding()
-                if (meter == null) meter = meterFor(codec.outputFormat)
+                if (meter == null) meter = listenersFor(codec.outputFormat, loudness, beats)
                 continue
             }
             if (index < 0) continue
 
             val buffer = codec.getOutputBuffer(index)
             if (buffer != null && info.size > 0) {
-                if (meter == null) meter = meterFor(codec.outputFormat)
+                if (meter == null) meter = listenersFor(codec.outputFormat, loudness, beats)
                 buffer.position(info.offset)
                 buffer.limit(info.offset + info.size)
                 scratch = push(meter, buffer, encoding, scratch)
@@ -118,22 +128,35 @@ internal object TrackScan {
 
             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
         }
-        return meter?.result()
+        val listeners = meter ?: return null
+        return Analysis(listeners.loudness?.result(), listeners.beats?.result())
     }
 
-    private fun meterFor(format: MediaFormat): LoudnessMeter = LoudnessMeter(
-        format.getInteger(MediaFormat.KEY_SAMPLE_RATE),
-        format.getInteger(MediaFormat.KEY_CHANNEL_COUNT),
-    )
+    /** Whichever of the two the track still needs, fed the same samples. */
+    private class Listeners(val loudness: LoudnessMeter?, val beats: BeatTracker?) {
+        fun feed(samples: FloatArray, count: Int) {
+            loudness?.feed(samples, count)
+            beats?.feed(samples, count)
+        }
+    }
+
+    private fun listenersFor(format: MediaFormat, loudness: Boolean, beats: Boolean): Listeners {
+        val rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        val channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+        return Listeners(
+            loudness = if (loudness) LoudnessMeter(rate, channels) else null,
+            beats = if (beats) BeatTracker(rate, channels) else null,
+        )
+    }
 
     /**
-     * One decoded buffer into the meter, at a full scale of 1.0 whichever width it arrived in.
+     * One decoded buffer into the listeners, at a full scale of 1.0 whichever width it arrived in.
      *
      * The scratch array is handed back rather than reallocated per buffer: a four-minute track is
      * a few thousand of these, and the meter only ever reads as far as [count].
      */
     private fun push(
-        meter: LoudnessMeter,
+        meter: Listeners,
         buffer: ByteBuffer,
         encoding: Int,
         scratch: FloatArray,

@@ -9,6 +9,7 @@ import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.exp
 import kotlin.math.sqrt
 
@@ -22,20 +23,84 @@ import kotlin.math.sqrt
  * is filed by the frame it describes, and [level] looks up the frame the track says is being
  * heard right now, the same way the player's position is kept honest.
  *
+ * A track the analysis sweep has already been through brings its [grid] instead: the beats found
+ * by listening to the whole file, read against the player's own position. That pulses on every
+ * beat, including the ones with no bass under them, and can start to swell just before each one.
+ * The live measurement is what is left for a track the sweep has not reached, or one it found no
+ * steady beat in.
+ *
  * Service and screen share one process, so this is a plain object between them rather than
  * anything carried over the media session.
  */
 object MusicPulse {
 
+    /** Where a track's beats fall and how hard each lands; see [Beats]. */
+    class BeatGrid(private val timesMs: IntArray, private val strengths: FloatArray) {
+
+        /**
+         * The glow at [positionMs]: rising over [LEAD_MS] into each beat so that it peaks on it,
+         * then dying away over [DECAY_MS]. A weak beat still pulses, at a little over half, so a
+         * quiet bar keeps time rather than going dark.
+         */
+        fun levelAt(positionMs: Long): Float {
+            var next = timesMs.binarySearch(positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
+            if (next < 0) next = -next - 1 else next++
+            var level = 0f
+            val previous = next - 1
+            if (previous >= 0) {
+                val since = positionMs - timesMs[previous]
+                level = weight(previous) * exp(-since / DECAY_MS)
+            }
+            if (next < timesMs.size) {
+                val until = timesMs[next] - positionMs
+                if (until < LEAD_MS) {
+                    val rise = 1f - until / LEAD_MS
+                    level = maxOf(level, weight(next) * rise * rise)
+                }
+            }
+            return level
+        }
+
+        private fun weight(index: Int) = 0.55f + 0.45f * strengths[index]
+
+        private companion object {
+            const val LEAD_MS = 60f
+            const val DECAY_MS = 160f
+        }
+    }
+
+    /** The current track's beats, when it has some worth trusting. Set by the service. */
+    @Volatile
+    var grid: BeatGrid? = null
+
+    /**
+     * The player's position, as heard. Set by the service, and only ever called from the main
+     * thread, which is the player's own and the one the screen draws on.
+     */
+    @Volatile
+    var clock: (() -> Long)? = null
+
     /** How much of the past is kept: well past any output latency, Bluetooth included. */
     private const val SLOTS = 2048
 
     /**
-     * Whether anything is watching. Set by the player screen while it shows the pulse; while it
-     * is false the processor only counts frames and does no arithmetic on them.
+     * How many play buttons are showing the pulse: the player's, the mini player's, or for a
+     * moment while one screen gives way to the other, both. A count rather than a flag, so the
+     * one leaving cannot switch the measuring off under the one arriving.
      */
-    @Volatile
-    var listening = false
+    private val watchers = AtomicInteger()
+
+    fun watch() {
+        watchers.incrementAndGet()
+    }
+
+    fun unwatch() {
+        watchers.decrementAndGet()
+    }
+
+    /** Whether anything is watching; while nothing is, the processor only counts frames. */
+    val listening: Boolean
+        get() = watchers.get() > 0
 
     private val slots = FloatArray(SLOTS)
 
@@ -88,6 +153,14 @@ object MusicPulse {
      * the play head so that a paused track does not run on without it.
      */
     fun level(): Float? {
+        val grid = grid
+        val clock = clock
+        if (grid != null && clock != null) return grid.levelAt(clock())
+        return heard()
+    }
+
+    /** The live measurement, at the frame being heard now. */
+    private fun heard(): Float? {
         val track = track ?: return null
         val hop = hopFrames.takeIf { it > 0 } ?: return null
         val rate = sampleRate.takeIf { it > 0 } ?: return null
@@ -115,14 +188,19 @@ object MusicPulse {
 }
 
 /**
- * Passes the audio through untouched and files how hard its low end is hitting with
- * [MusicPulse], a hundred times a second.
+ * Passes the audio through untouched and files how hard the music is hitting with [MusicPulse],
+ * a hundred times a second.
  *
  * What it measures is the bass and the kick, below about 120 Hz, taken against how loud that band
  * has been on average over the last second or two rather than against full scale: a quiet track
  * pulses as visibly as a loud one, and only what stands out of its surroundings lights the glow,
  * so a steady bass line or a held note settles low instead of holding it full. It rises at once on
  * a hit and falls away over [RELEASE_SECONDS], which is what makes it read as a beat.
+ *
+ * Not every passage has a low end to follow: an intro on synths and voice alone, a breakdown, an
+ * acoustic song. While the bass is too faint to follow — silent, or small beside everything above
+ * it — the same measure is taken of everything above it instead, which pulses on the notes rather
+ * than the kick but keeps the glow alive.
  *
  * Last in the chain, so it measures what is heard, equalizer and all, and so that the frames it
  * counts are the frames the track is given.
@@ -139,11 +217,31 @@ class PulseProcessor : BaseAudioProcessor() {
     // The audio thread's alone.
     private var hops = 0L
     private var inHop = 0
-    private var energy = 0.0
     private var first = 0.0
     private var second = 0.0
-    private var envelope = 0.0
-    private var average = 0.0
+    private val bass = Band()
+    private val above = Band()
+
+    /** One band's hop of energy, the envelope over it, and its recent average. */
+    private inner class Band {
+        var energy = 0.0
+        var envelope = 0.0
+        var average = 0.0
+
+        /** Closes a hop: returns where the envelope stands against the average. */
+        fun close(): Double {
+            val amplitude = sqrt(energy / hop)
+            envelope = maxOf(amplitude, envelope * release)
+            average += (amplitude - average) * (1.0 - fade)
+            energy = 0.0
+            return if (average <= FLOOR) 0.0 else envelope / average
+        }
+
+        fun rest() {
+            energy = 0.0
+            envelope = 0.0
+        }
+    }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat):
         AudioProcessor.AudioFormat {
@@ -170,7 +268,8 @@ class PulseProcessor : BaseAudioProcessor() {
             MusicPulse.fresh = false
             hops = 0L
             inHop = 0
-            energy = 0.0
+            bass.energy = 0.0
+            above.energy = 0.0
             MusicPulse.restart()
         }
 
@@ -200,11 +299,15 @@ class PulseProcessor : BaseAudioProcessor() {
             for (channel in 0 until channels) {
                 sum += if (float) input.getFloat().toDouble() else input.getShort() / 32768.0
             }
+            val mono = sum / channels
             // Two one-pole low-passes in a row: a gentle slope, but a steep enough one to leave
-            // the kick and the bass and little of anything above them.
-            first += lowPass * (sum / channels - first)
+            // the kick and the bass and little of anything above them. What they take away is
+            // the rest.
+            first += lowPass * (mono - first)
             second += lowPass * (first - second)
-            energy += second * second
+            bass.energy += second * second
+            val rest = mono - second
+            above.energy += rest * rest
             step()
         }
     }
@@ -217,19 +320,21 @@ class PulseProcessor : BaseAudioProcessor() {
     private fun step() {
         if (++inHop < hop) return
 
-        val amplitude = sqrt(energy / hop)
-        envelope = maxOf(amplitude, envelope * release)
-        average += (amplitude - average) * (1.0 - fade)
-        val level = if (!MusicPulse.listening || average <= FLOOR) {
+        val low = bass.close()
+        val high = above.close()
+        // Both bands are always kept up, so that the one taken over has an average ready and
+        // the glow does not jump when the bass drops out or comes back.
+        val followBass = bass.average > FLOOR && bass.average >= above.average * BASS_SHARE
+        val standing = if (followBass) low else high
+        val level = if (!MusicPulse.listening || standing <= 0.0) {
             0.0
         } else {
             // At the average the glow sits just above rest; a hit [STANDOUT] times the average
             // fills it.
-            ((envelope / average - REST) / (STANDOUT - REST)).coerceIn(0.0, 1.0)
+            ((standing - REST) / (STANDOUT - REST)).coerceIn(0.0, 1.0)
         }
         MusicPulse.file(hops++, level.toFloat())
         inHop = 0
-        energy = 0.0
     }
 
     /**
@@ -239,11 +344,13 @@ class PulseProcessor : BaseAudioProcessor() {
     override fun onFlush() {
         first = 0.0
         second = 0.0
-        envelope = 0.0
+        bass.rest()
+        above.rest()
     }
 
     override fun onReset() {
-        average = 0.0
+        bass.average = 0.0
+        above.average = 0.0
     }
 
     private companion object {
@@ -258,6 +365,12 @@ class PulseProcessor : BaseAudioProcessor() {
 
         /** About −50 dBFS: below it the band is silence, and nothing is drawn. */
         const val FLOOR = 0.003
+
+        /**
+         * How loud the bass has to be, against everything above it, to be the band followed.
+         * About −16 dB: a mix with any real low end clears it easily, an intro with none does not.
+         */
+        const val BASS_SHARE = 0.15
 
         /** Where on the scale, as a share of the average, the glow starts to rise. */
         const val REST = 0.8

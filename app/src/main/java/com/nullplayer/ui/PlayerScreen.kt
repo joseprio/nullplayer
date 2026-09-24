@@ -61,10 +61,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableFloatState
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -115,7 +112,6 @@ import com.nullplayer.data.Group
 import com.nullplayer.data.GroupSummary
 import com.nullplayer.data.Track
 import com.nullplayer.data.TrackOrder
-import com.nullplayer.playback.MusicPulse
 import com.nullplayer.playback.PlayerUiState
 import com.nullplayer.playback.RepeatMode as PlayerRepeatMode
 import com.nullplayer.playback.SleepTimer
@@ -124,7 +120,6 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
-import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
@@ -1936,53 +1931,6 @@ private fun remainder(state: PlayerUiState, shown: Float): String = when {
     state.settings.showRemainingTime ->
         "-" + clock(state.durationMs - (shown * state.durationMs).toLong())
     else -> clock(state.durationMs)
-}
-
-/**
- * The glow's breath, frame by frame, while [enabled]; null when the pulse is switched off.
- *
- * Playing, it follows [MusicPulse] at the frame being heard. Paused, or with nothing to go on, it
- * settles back to one half, which is the glow as it always was, so stopping the music leaves the
- * button looking as it did before the pulse existed.
- *
- * The value only ever reaches the draw phase, so the loop repaints the glow without composing
- * anything; and it runs only while this is on screen, which is also the only time the service is
- * asked to measure anything.
- */
-@Composable
-private fun rememberMusicPulse(enabled: Boolean, playing: Boolean): MutableFloatState? {
-    val breath = remember { mutableFloatStateOf(0.5f) }
-    if (!enabled) return null
-
-    DisposableEffect(Unit) {
-        MusicPulse.listening = true
-        onDispose { MusicPulse.listening = false }
-    }
-    LaunchedEffect(playing) {
-        var last = 0L
-        while (true) {
-            withFrameNanos { now ->
-                val seconds = if (last == 0L) 0f else (now - last) / 1_000_000_000f
-                last = now
-                val target = if (playing) MusicPulse.level() ?: 0f else 0.5f
-                // Quick to rise and a touch slower to fall, over what the processor already
-                // does: enough to hide a frame that lands between two readings, not so much that
-                // the hit arrives late. Out of the music the glow eases rather than jumps.
-                val settle = when {
-                    !playing -> 0.25f
-                    target > breath.floatValue -> 0.02f
-                    else -> 0.06f
-                }
-                val step = 1f - exp(-seconds / settle)
-                breath.floatValue += (target - breath.floatValue) * step
-            }
-            if (!playing && abs(breath.floatValue - 0.5f) < 0.001f) {
-                breath.floatValue = 0.5f
-                break
-            }
-        }
-    }
-    return breath
 }
 
 @Composable

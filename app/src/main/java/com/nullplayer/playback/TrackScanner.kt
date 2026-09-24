@@ -2,6 +2,7 @@ package com.nullplayer.playback
 
 import android.os.Process
 import android.util.Log
+import com.nullplayer.data.TrackBeats
 import com.nullplayer.data.VaultRepository
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -15,7 +16,7 @@ import java.util.concurrent.Executors
 private const val TAG = "TrackScanner"
 
 /**
- * The sweep that measures the loudness of whatever has not been measured yet.
+ * The sweep that measures the loudness, and finds the beats, of whatever has not had them yet.
  *
  * One track at a time, oldest first, with a pause between them. Analysing is decoding, so a vault
  * of a few hundred tracks is a few minutes of work the phone would rather not do all at once —
@@ -65,6 +66,12 @@ class TrackScanner(private val repository: VaultRepository) {
 
     /** How many tracks are genuinely still to analyse: the unanalysed, less the unreadable. */
     val remaining: Flow<Int> =
+        combine(repository.observeUnanalysed(BeatTracker.VERSION), skipped) { pending, unreadable ->
+            pending.count { it !in unreadable }
+        }
+
+    /** Of those, the ones still without a loudness, which is what normalisation waits on. */
+    val unmeasured: Flow<Int> =
         combine(repository.observeUnmeasured(), skipped) { pending, unreadable ->
             pending.count { it !in unreadable }
         }
@@ -73,14 +80,24 @@ class TrackScanner(private val repository: VaultRepository) {
     suspend fun drain() = withContext(sweepThread) {
         while (true) {
             val unreadable = skipped.value
-            val next = repository.unmeasured().firstOrNull { it.id !in unreadable }
+            val next = repository.unanalysed(BeatTracker.VERSION).firstOrNull { it.id !in unreadable }
                 ?: return@withContext
-            val loudness = TrackScan.measure(repository.files.fileFor(next.id))
-            if (loudness == null) {
+            val wantsBeats = repository.beats(next.id)?.version != BeatTracker.VERSION
+            val analysis = TrackScan.analyse(
+                repository.files.fileFor(next.id),
+                loudness = next.loudnessLufs == null,
+                beats = wantsBeats,
+            )
+            if (analysis == null) {
                 skipped.update { it + next.id }
                 Log.i(TAG, "Nothing to analyse in ${next.id}")
             } else {
-                repository.setLoudness(next.id, loudness.lufs, loudness.peak)
+                analysis.loudness?.let { repository.setLoudness(next.id, it.lufs, it.peak) }
+                analysis.beats?.let { beats ->
+                    repository.setBeats(
+                        TrackBeats(next.id, BeatTracker.VERSION, beats.confidence, beats.encode())
+                    )
+                }
             }
             delay(BREATH_MS)
         }
