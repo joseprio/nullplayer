@@ -67,6 +67,9 @@ object PlaybackGate {
 
     private var bound = false
 
+    /** Set once, by [bind]; null only before then. */
+    private var outputs: AudioOutputs? = null
+
     /** Wired up once, from `NullPlayerApp`, so the answer is ready before anything asks. */
     @Synchronized
     fun bind(context: Context, scope: CoroutineScope) {
@@ -75,6 +78,7 @@ object PlaybackGate {
 
         val settings = Settings(context.applicationContext)
         val outputs = AudioOutputs(context.applicationContext)
+        this.outputs = outputs
 
         scope.launch {
             settings.all.collect { config ->
@@ -96,8 +100,22 @@ object PlaybackGate {
         }
     }
 
+    /**
+     * Reads what is connected now, straight from the system, rather than waiting on the callback.
+     *
+     * The callback is what keeps [state] up to date, but it is delivered to the process whenever
+     * the process gets round to it: an app sitting in the background can be frozen, and a headset
+     * plugged in meanwhile may be reported late or not at all. So the answer is read again
+     * whenever it matters -- coming back to the screen, and every time something asks to play.
+     */
+    fun refreshOutputs() {
+        val now = outputs?.snapshot() ?: return
+        _state.update { it.copy(outputs = now) }
+    }
+
     /** Why playback cannot start right now, or null if it can. */
     fun blockReason(): Block? {
+        refreshOutputs()
         val current = _state.value
         return when {
             !current.outputSatisfied -> Block.OUTPUT_DEVICE
@@ -125,6 +143,7 @@ object PlaybackGate {
      * consulted: they gate the music, and being told what is playing is not a way into the vault.
      */
     fun allowVoiceOver(): Boolean {
+        refreshOutputs()
         val satisfied = _state.value.outputSatisfied
         if (!satisfied) _blocked.value = Block.VOICE_OVER_OUTPUT
         return satisfied

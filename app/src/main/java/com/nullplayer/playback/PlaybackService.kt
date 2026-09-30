@@ -12,12 +12,22 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.DeviceInfo
 import androidx.media3.common.Format
 import androidx.media3.common.ForwardingPlayer
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Metadata
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
+import androidx.media3.common.TrackSelectionParameters
+import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
+import androidx.media3.common.text.Cue
+import androidx.media3.common.text.CueGroup
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.analytics.AnalyticsListener
@@ -74,6 +84,9 @@ class PlaybackService : MediaSessionService() {
      */
     private var haptics: HapticEngine? = null
     private val hapticTracks = HapticTracks()
+
+    /** The vibrator as a subwoofer; see [HapticMode.SUBWOOFER]. */
+    private var subwoofer: SubwooferHaptics? = null
 
     private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
 
@@ -135,7 +148,7 @@ class PlaybackService : MediaSessionService() {
         val equalizer = EqualizerProcessor()
         val gain = GainProcessor()
         val crossfeed = CrossfeedProcessor()
-        val pulse = PulseProcessor()
+        val pulse = PeakProcessor()
         AudioEffects.attach(equalizer, gain, crossfeed)
 
         val exoPlayer = ExoPlayer.Builder(this)
@@ -181,6 +194,7 @@ class PlaybackService : MediaSessionService() {
         if (HapticSupport.available()) {
             haptics = HapticEngine(exoPlayer, hapticTracks)
         }
+        subwoofer = SubwooferHaptics(this, exoPlayer, scope)
 
         exoPlayer.addListener(PlaybackTicket())
         exoPlayer.addAnalyticsListener(PlaybackDiagnostics())
@@ -217,6 +231,7 @@ class PlaybackService : MediaSessionService() {
         MusicPulse.grid = null
         runCatching { unregisterReceiver(becomingNoisy) }
         haptics?.release()
+        subwoofer?.release()
         AudioEffects.release()
         SleepTimer.cancel()
         voiceOver.release()
@@ -726,6 +741,7 @@ class PlaybackService : MediaSessionService() {
      * `collectLatest` is what makes re-arming work: changing the deadline cancels the pending
      * delay rather than leaving a second one running behind it.
      */
+
     private fun watchSleepTimer() {
         scope.launch {
             SleepTimer.deadline.collectLatest { deadline ->
@@ -824,14 +840,19 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    /** Keeps the generator in step with the stored setting, where there is a generator to keep. */
+    /**
+     * Keeps the generator and the subwoofer in step with the stored mode. Each is told whether it is
+     * the one wanted, so a change of mode turns the old one off as it turns the new one on.
+     */
     private fun watchHaptics() {
-        val engine = haptics ?: return
         scope.launch {
             settings.all
-                .map { it.haptics }
+                .map { HapticMode.ofOrdinal(it.hapticModeOrdinal) }
                 .distinctUntilChanged()
-                .collect { engine.configure(it) }
+                .collect { mode ->
+                    haptics?.configure(mode == HapticMode.AUDIO)
+                    subwoofer?.configure(mode == HapticMode.SUBWOOFER)
+                }
         }
     }
 
@@ -880,10 +901,10 @@ class PlaybackService : MediaSessionService() {
     }
 
     /**
-     * Hands the pulse the new track's beats, or takes the last track's away.
+     * Hands [MusicPulse] the new track's beats, or takes the last track's away.
      *
-     * Cleared at once rather than when the read comes back, so the moment between is spent on the
-     * live pulse and never on the old track's grid laid over the new track's position.
+     * Cleared at once rather than when the read comes back, so the moment between is spent still
+     * and never on the old track's grid laid over the new track's position.
      */
     private fun applyBeats(trackId: String?) {
         beatsLookup?.cancel()
@@ -919,7 +940,7 @@ class PlaybackService : MediaSessionService() {
         private val equalizer: EqualizerProcessor,
         private val gain: GainProcessor,
         private val crossfeed: CrossfeedProcessor,
-        private val pulse: PulseProcessor,
+        private val pulse: PeakProcessor,
         private val hapticTracks: HapticTracks,
     ) : DefaultRenderersFactory(context) {
         override fun buildAudioSink(
@@ -930,8 +951,8 @@ class PlaybackService : MediaSessionService() {
             // Normalisation first: a track pulled down to the target reaches the curve with room
             // for its boosts, where the same attenuation after the curve would arrive too late.
             // Crossfeed last: it only ever mixes the two sides of what it is given, so it can add
-            // nothing to a peak the curve has already clamped. The pulse after all of them, so it
-            // measures what is heard and counts the frames the track is given.
+            // nothing to a peak the curve has already clamped. The peak meter after all of them, so
+            // it measures what is heard and counts the frames the track is given.
             .setAudioProcessors(arrayOf(gain, equalizer, crossfeed, pulse))
             // Left off after measuring what turning it on actually does here.
             //
@@ -1090,6 +1111,14 @@ class PlaybackService : MediaSessionService() {
      * It answers with the track's real tags, read by the service rather than merged by
      * ExoPlayer, so what the notification shows is what the dock shows and not whatever the
      * stream's tags happened to contain.
+     *
+     * The getter is only half of it. The session keeps its own copy of the metadata, taken from
+     * the change events rather than from the getter, and the base class forwards those events
+     * with ExoPlayer's merged tags in them. So every listener is wrapped, and its metadata events
+     * carry this class's answer instead. Without that, the file's own tags reached every
+     * controller all the same -- a FLAC's embedded cover at full size among them, over a
+     * megabyte, resent to a paired watch on every change of state until its transaction buffer
+     * overflowed, and built on the main thread each time.
      */
     private class AnonymousPlayer(
         player: Player,
@@ -1099,27 +1128,98 @@ class PlaybackService : MediaSessionService() {
     ) : ForwardingPlayer(player) {
 
         /**
-         * Everyone listening to this player, kept so that [metadataChanged] can reach them.
-         * The session registers through [addListener], and the base class wraps and forwards
-         * what the wrapped player says; a change that only this class knows about — the tags
-         * arriving from disk — has to be announced from here.
+         * Everyone listening to this player, each with the wrapper it was registered as, kept so
+         * that [metadataChanged] can reach them. The session registers through [addListener],
+         * and the base class wraps and forwards what the wrapped player says; a change that only
+         * this class knows about — the tags arriving from disk — has to be announced from here.
          */
-        private val listeners = java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
+        private val listeners = java.util.concurrent.ConcurrentHashMap<Player.Listener, Masked>()
+
+        /**
+         * A listener whose metadata events carry [getMediaMetadata] rather than ExoPlayer's, and
+         * which passes everything else through untouched.
+         *
+         * Every method is forwarded by hand. They are all Java default methods, and Kotlin's `by`
+         * delegation does not forward those: a delegating wrapper compiles, but everything but
+         * the one override lands on the interface's empty default, and the session never hears
+         * that the player is playing, has moved, or can seek.
+         */
+        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
+        private inner class Masked(private val inner: Player.Listener) : Player.Listener {
+            override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) =
+                inner.onMediaMetadataChanged(this@AnonymousPlayer.mediaMetadata)
+
+            override fun onEvents(player: Player, events: Player.Events) = inner.onEvents(player, events)
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) =
+                inner.onTimelineChanged(timeline, reason)
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) =
+                inner.onMediaItemTransition(mediaItem, reason)
+            override fun onTracksChanged(tracks: Tracks) = inner.onTracksChanged(tracks)
+            override fun onPlaylistMetadataChanged(mediaMetadata: MediaMetadata) =
+                inner.onPlaylistMetadataChanged(mediaMetadata)
+            override fun onIsLoadingChanged(isLoading: Boolean) = inner.onIsLoadingChanged(isLoading)
+            override fun onLoadingChanged(isLoading: Boolean) = inner.onLoadingChanged(isLoading)
+            override fun onAvailableCommandsChanged(availableCommands: Player.Commands) =
+                inner.onAvailableCommandsChanged(availableCommands)
+            override fun onTrackSelectionParametersChanged(parameters: TrackSelectionParameters) =
+                inner.onTrackSelectionParametersChanged(parameters)
+            override fun onPlayerStateChanged(playWhenReady: Boolean, playbackState: Int) =
+                inner.onPlayerStateChanged(playWhenReady, playbackState)
+            override fun onPlaybackStateChanged(playbackState: Int) =
+                inner.onPlaybackStateChanged(playbackState)
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) =
+                inner.onPlayWhenReadyChanged(playWhenReady, reason)
+            override fun onPlaybackSuppressionReasonChanged(reason: Int) =
+                inner.onPlaybackSuppressionReasonChanged(reason)
+            override fun onIsPlayingChanged(isPlaying: Boolean) = inner.onIsPlayingChanged(isPlaying)
+            override fun onRepeatModeChanged(repeatMode: Int) = inner.onRepeatModeChanged(repeatMode)
+            override fun onShuffleModeEnabledChanged(enabled: Boolean) =
+                inner.onShuffleModeEnabledChanged(enabled)
+            override fun onPlayerError(error: PlaybackException) = inner.onPlayerError(error)
+            override fun onPlayerErrorChanged(error: PlaybackException?) = inner.onPlayerErrorChanged(error)
+            override fun onPositionDiscontinuity(reason: Int) = inner.onPositionDiscontinuity(reason)
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int,
+            ) = inner.onPositionDiscontinuity(oldPosition, newPosition, reason)
+            override fun onPlaybackParametersChanged(parameters: PlaybackParameters) =
+                inner.onPlaybackParametersChanged(parameters)
+            override fun onSeekBackIncrementChanged(ms: Long) = inner.onSeekBackIncrementChanged(ms)
+            override fun onSeekForwardIncrementChanged(ms: Long) = inner.onSeekForwardIncrementChanged(ms)
+            override fun onMaxSeekToPreviousPositionChanged(ms: Long) =
+                inner.onMaxSeekToPreviousPositionChanged(ms)
+            override fun onAudioSessionIdChanged(id: Int) = inner.onAudioSessionIdChanged(id)
+            override fun onAudioAttributesChanged(attributes: AudioAttributes) =
+                inner.onAudioAttributesChanged(attributes)
+            override fun onVolumeChanged(volume: Float) = inner.onVolumeChanged(volume)
+            override fun onSkipSilenceEnabledChanged(enabled: Boolean) =
+                inner.onSkipSilenceEnabledChanged(enabled)
+            override fun onDeviceInfoChanged(info: DeviceInfo) = inner.onDeviceInfoChanged(info)
+            override fun onDeviceVolumeChanged(volume: Int, muted: Boolean) =
+                inner.onDeviceVolumeChanged(volume, muted)
+            override fun onVideoSizeChanged(size: VideoSize) = inner.onVideoSizeChanged(size)
+            override fun onSurfaceSizeChanged(width: Int, height: Int) =
+                inner.onSurfaceSizeChanged(width, height)
+            override fun onRenderedFirstFrame() = inner.onRenderedFirstFrame()
+            override fun onCues(cues: List<Cue>) = inner.onCues(cues)
+            override fun onCues(cueGroup: CueGroup) = inner.onCues(cueGroup)
+            override fun onMetadata(metadata: Metadata) = inner.onMetadata(metadata)
+        }
 
         override fun addListener(listener: Player.Listener) {
-            listeners += listener
-            super.addListener(listener)
+            val masked = Masked(listener)
+            if (listeners.putIfAbsent(listener, masked) == null) super.addListener(masked)
         }
 
         override fun removeListener(listener: Player.Listener) {
-            listeners -= listener
-            super.removeListener(listener)
+            listeners.remove(listener)?.let { super.removeListener(it) }
         }
 
         /** Tells the session that what [getMediaMetadata] answers has changed. */
         fun metadataChanged() {
             val metadata = mediaMetadata
-            listeners.forEach { it.onMediaMetadataChanged(metadata) }
+            listeners.values.forEach { it.onMediaMetadataChanged(metadata) }
         }
 
         override fun getMediaMetadata(): MediaMetadata {
@@ -1143,8 +1243,8 @@ class PlaybackService : MediaSessionService() {
         const val TAG = "PlaybackService"
 
         /**
-         * How clearly a track has to keep a steady beat for its grid to drive the glow; below it
-         * the live pulse does. See [Beats.confidence].
+         * How clearly a track has to keep a steady beat for its grid to be handed on. See
+         * [Beats.confidence].
          */
         const val BEAT_CONFIDENCE = 0.2f
         const val DUCKED_VOLUME = 0.18f

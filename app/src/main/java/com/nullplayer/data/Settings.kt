@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.nullplayer.playback.HapticMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -165,12 +166,13 @@ data class AppSettings(
      */
     val crossfeedHeadphonesOnly: Boolean = true,
     /**
-     * Vibrate with the music, through the platform's haptic generator.
+     * How the phone vibrates with the music, stored as an ordinal of
+     * [com.nullplayer.playback.HapticMode].
      *
-     * Only ever honoured on a phone whose audio path carries haptic channels; elsewhere the
-     * switch is shown disabled.
+     * Only ever honoured where the phone can play the mode chosen; elsewhere the choice is shown
+     * disabled.
      */
-    val haptics: Boolean = false,
+    val hapticModeOrdinal: Int = 0,
     /** Which tile the ribbon has selected. Blank is the whole vault. */
     val activeGroupId: String = "",
     /**
@@ -281,7 +283,9 @@ class Settings(private val context: Context) {
             crossfeed = prefs[CROSSFEED] ?: false,
             crossfeedStrengthOrdinal = prefs[CROSSFEED_STRENGTH] ?: 0,
             crossfeedHeadphonesOnly = prefs[CROSSFEED_HEADPHONES_ONLY] ?: true,
-            haptics = prefs[HAPTICS] ?: false,
+            // Before there were modes there was a switch, and on meant the generator.
+            hapticModeOrdinal = prefs[HAPTIC_MODE]
+                ?: if (prefs[HAPTICS] == true) HapticMode.AUDIO.ordinal else HapticMode.OFF.ordinal,
             activeGroupId = prefs[ACTIVE_GROUP].orEmpty(),
             lastTrackId = prefs[LAST_TRACK].orEmpty(),
             lastPositionMs = prefs[LAST_POSITION] ?: 0L,
@@ -353,7 +357,7 @@ class Settings(private val context: Context) {
 
     suspend fun setCrossfeedHeadphonesOnly(only: Boolean) = put(CROSSFEED_HEADPHONES_ONLY, only)
 
-    suspend fun setHaptics(haptics: Boolean) = put(HAPTICS, haptics)
+    suspend fun setHapticMode(ordinal: Int) = put(HAPTIC_MODE, ordinal)
 
 
     suspend fun setEqualizerBands(bands: List<Int>) =
@@ -418,7 +422,9 @@ class Settings(private val context: Context) {
         val CROSSFEED = booleanPreferencesKey("crossfeed")
         val CROSSFEED_STRENGTH = intPreferencesKey("crossfeed_strength")
         val CROSSFEED_HEADPHONES_ONLY = booleanPreferencesKey("crossfeed_headphones_only")
+        /** The old on/off switch; read only to carry it over to [HAPTIC_MODE]. */
         val HAPTICS = booleanPreferencesKey("haptics")
+        val HAPTIC_MODE = intPreferencesKey("haptic_mode")
         val TILE_MODES = stringPreferencesKey("tile_modes")
         val ACTIVE_GROUP = stringPreferencesKey("active_group")
         val LAST_TRACK = stringPreferencesKey("last_track")

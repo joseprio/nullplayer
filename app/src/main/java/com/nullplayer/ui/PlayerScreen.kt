@@ -3,6 +3,16 @@ package com.nullplayer.ui
 import android.graphics.BlurMaskFilter
 import android.graphics.Paint
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
+import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.cos
 import androidx.compose.foundation.Image
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
@@ -2134,29 +2144,13 @@ private fun Utilities(
         ),
         modifier = Modifier.fillMaxWidth().lineEdges().bleed(SEEKER_THICKNESS / 2),
     ) {
-        // The Favorites magenta rather than the accent, so the heart is the tile it puts the
-        // track in -- at full strength, where the tile wears it a shade paler.
-        Box(
-            modifier = Modifier
-                .size(size)
-                .clip(CircleShape)
-                .clickable(
-                    onClickLabel = if (state.currentIsFavorite) {
-                        "Remove from favorites"
-                    } else {
-                        "Add to favorites"
-                    },
-                    onClick = onToggleFavorite,
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            Glyph(
-                if (state.currentIsFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                if (state.currentIsFavorite) Color(Group.FAVORITES_HEART_COLOR) else TEXT,
-                contentDescription = null,
-                size = size * HEART_GLYPH,
-            )
-        }
+        HeartButton(
+            trackId = state.currentTrack?.id,
+            favorite = state.currentIsFavorite,
+            onToggle = onToggleFavorite,
+            size = size,
+            pressReach = reach,
+        )
         // A press here files the track. Filing is the one thing the dock could do to a track
         // that the player could not, and it is most wanted where the track is playing.
         GlyphButton(
@@ -2201,6 +2195,154 @@ private fun Utilities(
                         .background(DANGER)
                         .padding(horizontal = 4.dp, vertical = 1.dp),
                 )
+            }
+        }
+    }
+}
+
+/** How long a heart's burst takes to spend itself. */
+private const val HEART_BURST_MS = 700
+
+/** How long an un-hearted heart takes to pale to white and empty out. */
+private const val HEART_FADE_MS = 520
+
+/** How many sparks a heart throws off. */
+private const val HEART_SPARKS = 10
+
+/**
+ * The favourite toggle, and the one button in the row with something to celebrate.
+ *
+ * Hearting a track pops the heart up from small and throws a ring and a scatter of sparks out
+ * past the rim in the Favorites colours. Un-hearting pales the filled heart to white and then
+ * lets it drain away, leaving the white outline that was under it all along.
+ *
+ * Everything is keyed on [trackId], so a new track arrives with its heart already as it should
+ * be: the effects answer a change to this track, never the switch to another one. The sparks are
+ * drawn on the outer box, which neither clips nor scales, so they fly free of the press.
+ */
+@Composable
+private fun HeartButton(
+    trackId: String?,
+    favorite: Boolean,
+    onToggle: () -> Unit,
+    size: Dp,
+    pressReach: Float,
+) {
+    val magenta = Color(Group.FAVORITES_HEART_COLOR)
+    val pale = Color(Group.FAVORITES_COLOR)
+
+    // 1 is the full magenta heart, 0 the empty outline.
+    val fill = remember(trackId) { Animatable(if (favorite) 1f else 0f) }
+    // 1 is a burst already spent, so nothing is drawn until one is set off.
+    val burst = remember(trackId) { Animatable(1f) }
+    val pop = remember(trackId) { Animatable(1f) }
+    LaunchedEffect(trackId, favorite) {
+        if (favorite && fill.value < 1f) {
+            fill.snapTo(1f)
+            launch {
+                pop.snapTo(0.55f)
+                pop.animateTo(1f, spring(dampingRatio = 0.38f, stiffness = Spring.StiffnessMediumLow))
+            }
+            launch {
+                burst.snapTo(0f)
+                burst.animateTo(1f, tween(HEART_BURST_MS, easing = LinearEasing))
+            }
+        } else if (!favorite && fill.value > 0f) {
+            burst.snapTo(1f)
+            fill.animateTo(0f, tween(HEART_FADE_MS, easing = FastOutSlowInEasing))
+        }
+    }
+
+    val presses = remember { MutableInteractionSource() }
+    val pressed by presses.collectIsPressedAsState()
+    val press by animateFloatAsState(
+        targetValue = if (pressed) 0.86f else 1f,
+        animationSpec = tween(if (pressed) 80 else 160, easing = FastOutSlowInEasing),
+        label = "heartPress",
+    )
+    val wash by animateFloatAsState(
+        targetValue = if (pressed) 0.18f else 0f,
+        animationSpec = tween(if (pressed) 80 else 220),
+        label = "heartWash",
+    )
+
+    Box(
+        modifier = Modifier
+            .size(size)
+            .drawBehind {
+                if (wash > 0f) {
+                    drawCircle(
+                        lerp(TEXT, magenta, fill.value).copy(alpha = wash),
+                        radius = this.size.minDimension / 2f * pressReach,
+                    )
+                }
+            }
+            .drawWithContent {
+                drawContent()
+                val p = burst.value
+                if (p >= 1f) return@drawWithContent
+                val rim = this.size.minDimension / 2f
+                val out = FastOutSlowInEasing.transform(p)
+                // A ring that races out ahead of the sparks and thins to nothing on the way.
+                val ring = (p / 0.45f).coerceAtMost(1f)
+                if (ring < 1f) {
+                    drawCircle(
+                        color = magenta.copy(alpha = 1f - ring),
+                        radius = rim * (0.45f + 0.75f * FastOutSlowInEasing.transform(ring)),
+                        style = Stroke(width = rim * 0.22f * (1f - ring)),
+                    )
+                }
+                // Each spark is a bright dot with a smaller one trailing just off its line, so
+                // the scatter reads as confetti rather than as a clock face.
+                val fade = 1f - p * p
+                repeat(HEART_SPARKS) { i ->
+                    val angle = (i.toFloat() / HEART_SPARKS) * 2f * PI.toFloat() - PI.toFloat() / 2f
+                    val lead = if (i % 2 == 0) magenta else pale
+                    val tail = if (i % 2 == 0) pale else Color.White
+                    val far = rim * (0.55f + 0.8f * out)
+                    drawCircle(
+                        color = lead.copy(alpha = fade),
+                        radius = rim * 0.1f * (1f - p),
+                        center = center + Offset(cos(angle) * far, sin(angle) * far),
+                    )
+                    val skew = angle + 0.28f
+                    val near = rim * (0.5f + 0.6f * out)
+                    drawCircle(
+                        color = tail.copy(alpha = fade),
+                        radius = rim * 0.06f * (1f - p),
+                        center = center + Offset(cos(skew) * near, sin(skew) * near),
+                    )
+                }
+            }
+            .clickable(
+                interactionSource = presses,
+                indication = null,
+                onClickLabel = if (favorite) "Remove from favorites" else "Add to favorites",
+                onClick = onToggle,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier.graphicsLayer {
+                val scale = press * pop.value
+                scaleX = scale
+                scaleY = scale
+            },
+            contentAlignment = Alignment.Center,
+        ) {
+            // The outline is always there; the filled heart lies over it and is what comes and
+            // goes. Going, it pales to white over its first half and drains over its second.
+            Glyph(Icons.Filled.FavoriteBorder, TEXT, contentDescription = null, size = size * HEART_GLYPH)
+            val f = fill.value
+            if (f > 0f) {
+                Box(Modifier.graphicsLayer { alpha = (f * 2f).coerceAtMost(1f) }) {
+                    Glyph(
+                        Icons.Filled.Favorite,
+                        lerp(TEXT, magenta, ((f - 0.5f) * 2f).coerceIn(0f, 1f)),
+                        contentDescription = null,
+                        size = size * HEART_GLYPH,
+                    )
+                }
             }
         }
     }

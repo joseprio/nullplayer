@@ -47,6 +47,7 @@ import androidx.core.content.IntentCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.util.UnstableApi
+import com.nullplayer.playback.PlaybackGate
 import com.nullplayer.playback.PlayerViewModel
 import com.nullplayer.security.AppLock
 import com.nullplayer.security.Biometrics
@@ -367,7 +368,7 @@ class MainActivity : FragmentActivity() {
                                 onRequireOutputDevice = viewModel::setRequireOutputDevice,
                                 onRequiredDevice = viewModel::setRequiredDevice,
                                 onPreferredDevice = viewModel::setPreferredDevice,
-                                onHaptics = viewModel::setHaptics,
+                                onHapticMode = viewModel::setHapticMode,
                                 onClose = { screen = Screen.PLAYER },
                                 miniPlayer = miniPlayer,
                             )
@@ -433,6 +434,8 @@ class MainActivity : FragmentActivity() {
         AppLock.onForeground()
         // Enrolment can be added or removed while the app sits in the background.
         viewModel.refreshBiometrics()
+        // So can headphones, and the callback that reports them may not have reached us.
+        PlaybackGate.refreshOutputs()
         // Background work that can wait is told it no longer has to.
         viewModel.setOnScreen(true)
     }

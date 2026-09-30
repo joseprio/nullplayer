@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import com.nullplayer.data.AppSettings
 import com.nullplayer.playback.AudioOutput
 import com.nullplayer.playback.AudioOutputs
+import com.nullplayer.playback.HapticMode
 import com.nullplayer.playback.VoiceOption
 import com.nullplayer.playback.VoicePart
 import com.nullplayer.playback.voiceParts
@@ -73,7 +74,7 @@ fun SettingsScreen(
     onRequireOutputDevice: (Boolean) -> Unit,
     onRequiredDevice: (String) -> Unit,
     onPreferredDevice: (String) -> Unit,
-    onHaptics: (Boolean) -> Unit,
+    onHapticMode: (HapticMode) -> Unit,
     onClose: () -> Unit,
     miniPlayer: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
@@ -240,8 +241,8 @@ fun SettingsScreen(
                 Panel {
                     ToggleRow(
                         title = "Pulse with the music",
-                        subtitle = "The play button's glow swells with the bass and the kick " +
-                            "while the music plays.",
+                        subtitle = "The play button's glow follows the peaks of the bass, " +
+                            "like a meter, while it plays.",
                         checked = settings.pulseGlow,
                         onCheckedChange = onPulseGlow,
                     )
@@ -334,20 +335,34 @@ fun SettingsScreen(
 
             item {
                 Panel {
-                    ToggleRow(
-                        title = "Feel the music",
-                        subtitle = if (state.hapticsSupported) {
-                            "The phone vibrates with what it plays, worked out from the audio " +
-                                "as it goes. How strongly follows the system's media vibration " +
-                                "setting."
-                        } else {
-                            "The phone vibrates with what it plays. This phone's audio has no " +
-                                "haptic channels to carry it."
-                        },
-                        checked = settings.haptics && state.hapticsSupported,
-                        onCheckedChange = onHaptics,
-                        enabled = state.hapticsSupported,
-                    )
+                    Text("Feel the music", color = TEXT, fontSize = 15.sp)
+                    if (state.hapticModes.isEmpty()) {
+                        Text(
+                            "This phone's vibrator cannot follow the music.",
+                            color = MUTED,
+                            fontSize = 12.sp,
+                        )
+                    } else {
+                        Text(
+                            "How strongly follows the system's media vibration setting.",
+                            color = MUTED,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        // A mode this phone cannot play is left out rather than shown dead; one
+                        // stored from before, on a phone that has lost it, reads as off.
+                        val chosen = HapticMode.ofOrdinal(settings.hapticModeOrdinal)
+                            .takeIf { it in state.hapticModes } ?: HapticMode.OFF
+                        (listOf(HapticMode.OFF) + HapticMode.entries.filter { it in state.hapticModes })
+                            .forEach { mode ->
+                                ChoiceRow(
+                                    title = hapticTitle(mode),
+                                    subtitle = hapticSubtitle(mode),
+                                    selected = mode == chosen,
+                                    onSelect = { onHapticMode(mode) },
+                                )
+                            }
+                    }
                 }
             }
 
@@ -547,3 +562,16 @@ private fun requirementSubtitle(settings: AppSettings, outputs: List<AudioOutput
     return if (connected) "Connected. Playback will stop when it is unplugged." else "Not connected."
 }
 
+private fun hapticTitle(mode: HapticMode): String = when (mode) {
+    HapticMode.OFF -> "Off"
+    HapticMode.AUDIO -> "With the sound"
+    HapticMode.SUBWOOFER -> "Subwoofer"
+}
+
+private fun hapticSubtitle(mode: HapticMode): String? = when (mode) {
+    HapticMode.OFF -> null
+    HapticMode.AUDIO -> "Follows everything that plays, worked out from the audio as it goes."
+    HapticMode.SUBWOOFER ->
+        "Rumbles with the bass and thumps with the kick, as you hear them, like a subwoofer " +
+            "in your hand."
+}

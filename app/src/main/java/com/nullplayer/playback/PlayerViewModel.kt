@@ -109,8 +109,8 @@ data class PlayerUiState(
     val autoEqError: String? = null,
     /** How many tracks the background loudness analysis has yet to reach. */
     val unmeasuredTracks: Int = 0,
-    /** Whether this phone can vibrate with the music at all. Decides what the switch says. */
-    val hapticsSupported: Boolean = false,
+    /** The ways this phone can vibrate with the music; empty if it cannot at all. */
+    val hapticModes: Set<HapticMode> = emptySet(),
     val importsInFlight: Int = 0,
     val lastImportFailures: Int = 0,
     val settings: AppSettings = AppSettings(),
@@ -257,7 +257,10 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         onIntrusion = ::onWebServerIntrusion,
     )
     private val audioManager = application.getSystemService(AudioManager::class.java)
-    private val hapticsSupported = HapticSupport.available()
+    private val hapticModes = buildSet {
+        if (HapticSupport.available()) add(HapticMode.AUDIO)
+        if (SubwooferSupport.available(application)) add(HapticMode.SUBWOOFER)
+    }
     private val analysis = TrackScanner(repository)
 
     private val _state = MutableStateFlow(PlayerUiState())
@@ -471,7 +474,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                 _state.update { it.copy(equalizerCurve = curve) }
             }
         }
-        _state.update { it.copy(hapticsSupported = hapticsSupported) }
+        _state.update { it.copy(hapticModes = hapticModes) }
         viewModelScope.launch {
             analysis.unmeasured.collect { pending ->
                 _state.update { it.copy(unmeasuredTracks = pending) }
@@ -1127,8 +1130,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch { settings.setCrossfeedStrength(strength.ordinal) }
     }
 
-    fun setHaptics(enabled: Boolean) {
-        viewModelScope.launch { settings.setHaptics(enabled) }
+    fun setHapticMode(mode: HapticMode) {
+        viewModelScope.launch { settings.setHapticMode(mode.ordinal) }
     }
 
     fun setCrossfeedHeadphonesOnly(only: Boolean) {

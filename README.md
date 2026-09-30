@@ -170,9 +170,11 @@ The switches grey out when nothing is enrolled, and a lock already switched on f
 enrolment is later removed — a phone that could not authenticate would otherwise be a phone locked
 out of a vault with no export path.
 
-**Haptics.** *Feel the music* makes the phone vibrate with what it plays. How strongly follows
-the system's media vibration setting. The switch is disabled, and says why, on a phone whose
-audio has no haptic channels.
+**Haptics.** *Feel the music* makes the phone vibrate with the music, in one of two ways:
+*With the sound* follows everything that plays; *Subwoofer* follows only the sub-bass, rumbling
+with the bass line and thumping with the kick, and stays still where there is no low end.
+How strongly follows the system's media vibration setting. Only the modes this phone can play
+are offered.
 
 **Audio output.** *Only play to headphones* refuses to start unless a private listening device is
 connected: any headset, or one particular device chosen from the list. Whatever is stored stays in
@@ -235,6 +237,18 @@ Media3 hands over just before building. Flipping the switch mid-track seeks in p
 sink opens a new track under the new setting. Few phones have haptic channels, and on those that
 do the channels belong to the built-in output, so output routed to Bluetooth or USB headphones
 will usually play without vibration.
+
+The **subwoofer** (`SubwooferHaptics`) skips the audio path entirely and drives the vibrator
+directly. `PeakProcessor`, last in the chain, also runs the audio through two one-pole
+low-passes at 100 Hz and an envelope that falls over 50 ms, and files it by frame alongside the
+glow's peaks. A vibrator cannot be streamed to, so every 150 ms it is handed the next 200 ms of
+that envelope, starting 20 ms after the frame being heard (to allow for the actuator's
+start-up); each hand-over replaces the last before it ends. This reads into audio that has
+been measured but not played yet, which the sink's buffer always holds. The level is on a
+decibel scale from −40 to −6 dBFS. Where the vibrator takes envelopes (PWLE, Android 16+) the
+frequency sits at the lowest the actuator still moves well at and climbs towards its resonance
+on the hardest hits, with every segment clamped to what the vibrator reports it can take;
+elsewhere it is an amplitude waveform in 10 ms steps (any vibrator with amplitude control).
 
 **The sleep timer** is not persisted. One that survived a force-stop and silently paused the music
 the next morning would be a bug, not a feature. `PlaybackService` holds the deadline and does the
@@ -314,6 +328,7 @@ playback/ PlaybackService (MediaSessionService), PlayerViewModel, VoiceOver (TTS
           Biquad (cookbook sections), ParametricEq + AutoEqParser (AutoEQ profiles),
           TrackScan + TrackScanner (the background loudness sweep),
           LoudnessMeter (LUFS), HapticEngine (the platform haptic generator),
+          BeatHaptics (taps and kicks on the analysed beats),
           SleepTimer (the deadline)
 security/ Biometrics (the prompt), AppLock (is the app, the vault, or settings unlocked)
 ui/       PlayerScreen, LibraryScreen (the vault and its groups), TracksScreen (one list),
