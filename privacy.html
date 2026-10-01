@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nullplayer · Privacy policy</title>
+<meta name="description" content="nullplayer collects nothing: no account, no analytics, no ads, and no data sent off your device.">
+<style>
+  :root {
+    --bg: #0b0b0d;
+    --panel: #141519;
+    --line: #26272d;
+    --text: #ececef;
+    --muted: #8b8d94;
+    --accent: #30ffba;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 16px 64px; }
+  header { margin-bottom: 32px; }
+  .brand { color: var(--accent); font-weight: 600; letter-spacing: 0.12em; font-size: 14px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 8px 0 8px; font-weight: 600; }
+  .updated { color: var(--muted); font-size: 14px; margin: 0; }
+  .summary {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin: 0 0 36px;
+  }
+  .summary p { margin: 0; }
+  h2 {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 36px 0 10px;
+  }
+  p, li { color: var(--text); }
+  ul { padding-left: 20px; margin: 8px 0; }
+  li { margin: 6px 0; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  code { font-size: 0.92em; color: var(--muted); }
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand">NULLPLAYER</div>
+    <h1>Privacy policy</h1>
+    <p class="updated">Effective 2 October 2026</p>
+  </header>
+
+  <div class="summary">
+    <p><strong>nullplayer collects nothing.</strong> There is no account, no analytics, no
+    advertising and no crash reporting, and the app never sends your music, your library or
+    anything about you to its developer or to anyone else. Everything it keeps stays on your
+    device.</p>
+  </div>
+
+  <h2>What the app stores, and where</h2>
+  <ul>
+    <li><strong>Your music.</strong> Tracks you import are copied into the app's private storage
+      and encrypted with AES-256. The key that unlocks them is protected by the Android Keystore
+      and cannot be copied off the device.</li>
+    <li><strong>Your library.</strong> Track details read from the files (such as title, artist,
+      album and year), your groups and favourites, and a loudness measurement for each track are
+      kept in a database in the app's private storage, which other apps cannot read.</li>
+    <li><strong>Your settings.</strong> Kept in the app's private storage.</li>
+  </ul>
+  <p>None of this is included in Android backups or transferred to a new device: the app opts out
+    of both. Uninstalling the app, or clearing its storage, deletes all of it permanently.</p>
+
+  <h2>What leaves your device</h2>
+  <p>Nothing is sent to the developer. The app makes no connections to the internet. The only
+    times information moves beyond the app are these, and each is something you choose:</p>
+  <ul>
+    <li><strong>Importing.</strong> When you share or open audio files in nullplayer, it reads
+      them through Android. If you switch on deleting the originals, it asks Android to remove the
+      files you imported once they are safely in the vault.</li>
+    <li><strong>The upload page.</strong> Off by default. When you switch it on, the app serves a
+      page on your local network so a computer on the same network can add, download or delete
+      tracks. It is protected by a six-digit PIN shown on your phone, refuses further attempts
+      after five wrong guesses, and stops when you switch it off. The page is served over plain
+      HTTP within your own network, so use it only on a network you trust.</li>
+    <li><strong>The notification and connected devices.</strong> While music plays, Android shows
+      a media notification. Only if you turn on <em>Name the track in the notification</em> does
+      it include the title, artist and album art, which Android then also shows on the lock
+      screen and passes to devices that read the media session, such as a watch or a car.</li>
+    <li><strong>Spoken announcements.</strong> When you ask the app to announce a track, the text
+      is spoken by the text-to-speech engine installed on your device. Some engines may process
+      speech online; that is governed by the engine provider's own policy.</li>
+  </ul>
+
+  <h2>Biometric unlock</h2>
+  <p>The optional locks use Android's own fingerprint, face or screen-lock prompt. The app is told
+    only whether you passed; it never receives or stores biometric data.</p>
+
+  <h2>Permissions</h2>
+  <ul>
+    <li><strong>Network access</strong>: only for the optional upload page on your local network.</li>
+    <li><strong>Notifications</strong> and <strong>foreground service</strong>: to keep playing
+      with the screen off and show playback controls.</li>
+    <li><strong>Biometrics</strong>: for the optional locks.</li>
+    <li><strong>Vibration</strong>: for the optional haptics that follow the music.</li>
+    <li><strong>Audio settings</strong> and <strong>wake lock</strong>: to route sound to your
+      chosen output and keep playback and uploads running.</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>The app is not directed at children and, as above, collects no information from anyone.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the new version will be published on this page with a new effective
+    date. Its full history is in the
+    <a href="https://github.com/joseprio/nullplayer/commits/main/privacy.html">repository</a>.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about privacy can be raised as an
+    <a href="https://github.com/joseprio/nullplayer/issues">issue on GitHub</a>.</p>
+
+  <footer>nullplayer · <a href="https://github.com/joseprio/nullplayer">github.com/joseprio/nullplayer</a></footer>
+</main>
+</body>
+</html>
