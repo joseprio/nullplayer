@@ -99,9 +99,6 @@ class PlaybackService : MediaSessionService() {
     /** The loudness read for the current track, cancelled if the track changes under it. */
     private var loudnessLookup: Job? = null
 
-    /** The same, for the current track's beats. */
-    private var beatsLookup: Job? = null
-
     /** Writes the resume point down as the music moves. Alive only while it is moving. */
     private var progressJob: Job? = null
 
@@ -168,9 +165,6 @@ class PlaybackService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_LOCAL)
             .build()
         player = exoPlayer
-        // The position a beat grid is read against. The player's own rather than the session's,
-        // because the session's is a copy that a controller extrapolates between updates.
-        MusicPulse.clock = { exoPlayer.currentPosition }
 
         anonymousPlayer = AnonymousPlayer(
             player = CircularPlayer(exoPlayer),
@@ -227,8 +221,6 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        MusicPulse.clock = null
-        MusicPulse.grid = null
         runCatching { unregisterReceiver(becomingNoisy) }
         haptics?.release()
         subwoofer?.release()
@@ -585,7 +577,6 @@ class PlaybackService : MediaSessionService() {
         /** Every track brings its own level with it, so the gain is re-read on every change. */
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             applyLoudness(mediaItem?.mediaId)
-            applyBeats(mediaItem?.mediaId)
             currentTrackId.value = mediaItem?.mediaId
             // The position the old track reached is of no interest once it has been left.
             saveResumePoint()
@@ -897,26 +888,6 @@ class PlaybackService : MediaSessionService() {
                 Loudness(lufs = lufs, peak = track.peakAmplitude ?: 1.0)
             }
             AudioEffects.setTrackLoudness(measured)
-        }
-    }
-
-    /**
-     * Hands [MusicPulse] the new track's beats, or takes the last track's away.
-     *
-     * Cleared at once rather than when the read comes back, so the moment between is spent still
-     * and never on the old track's grid laid over the new track's position.
-     */
-    private fun applyBeats(trackId: String?) {
-        beatsLookup?.cancel()
-        MusicPulse.grid = null
-        if (trackId == null) return
-        beatsLookup = scope.launch {
-            val stored = repository.beats(trackId) ?: return@launch
-            if (stored.confidence < BEAT_CONFIDENCE) return@launch
-            val beats = Beats.decode(stored.beats, stored.confidence)
-            if (beats.timesMs.isNotEmpty()) {
-                MusicPulse.grid = MusicPulse.BeatGrid(beats.timesMs, beats.strengths)
-            }
         }
     }
 
@@ -1242,11 +1213,6 @@ class PlaybackService : MediaSessionService() {
     private companion object {
         const val TAG = "PlaybackService"
 
-        /**
-         * How clearly a track has to keep a steady beat for its grid to be handed on. See
-         * [Beats.confidence].
-         */
-        const val BEAT_CONFIDENCE = 0.2f
         const val DUCKED_VOLUME = 0.18f
 
         /** How often the resume point is written down while the music is running. */

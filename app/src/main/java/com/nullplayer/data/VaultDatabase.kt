@@ -8,8 +8,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Track::class, Group::class, TrackGroup::class, TrackBeats::class],
-    version = 8,
+    entities = [Track::class, Group::class, TrackGroup::class],
+    version = 9,
     exportSchema = true,
 )
 abstract class VaultDatabase : RoomDatabase() {
@@ -208,6 +208,13 @@ abstract class VaultDatabase : RoomDatabase() {
             }
         }
 
+        /** Version 9 drops the beats again: nothing reads them since the glow follows the bass. */
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS beats")
+            }
+        }
+
         fun get(context: Context): VaultDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -218,7 +225,7 @@ abstract class VaultDatabase : RoomDatabase() {
                 )
                     .addMigrations(
                         MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6,
-                        MIGRATION_6_7, MIGRATION_7_8,
+                        MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
                     )
                     .build()
                     .also { instance = it }

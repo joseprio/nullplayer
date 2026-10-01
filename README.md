@@ -328,7 +328,8 @@ playback/ PlaybackService (MediaSessionService), PlayerViewModel, VoiceOver (TTS
           Biquad (cookbook sections), ParametricEq + AutoEqParser (AutoEQ profiles),
           TrackScan + TrackScanner (the background loudness sweep),
           LoudnessMeter (LUFS), HapticEngine (the platform haptic generator),
-          BeatHaptics (taps and kicks on the analysed beats),
+          MusicPulse + PeakProcessor (the bass, as heard),
+          SubwooferHaptics (the vibrator as a subwoofer),
           SleepTimer (the deadline)
 security/ Biometrics (the prompt), AppLock (is the app, the vault, or settings unlocked)
 ui/       PlayerScreen, LibraryScreen (the vault and its groups), TracksScreen (one list),

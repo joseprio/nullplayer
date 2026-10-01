@@ -26,40 +26,10 @@ import kotlin.math.exp
  * The vibrator reads ahead of what is heard, into audio that has been measured but not played
  * yet, so each stretch of rumble can be handed over before it is due; see [rumble].
  *
- * The current track's beat [grid] and the player's [clock] are kept here too; nothing reads them
- * at the moment.
- *
  * Service and screen share one process, so this is a plain object between them rather than
  * anything carried over the media session.
  */
 object MusicPulse {
-
-    /** Where a track's beats fall and how hard each lands; see [Beats]. */
-    class BeatGrid(private val timesMs: IntArray, private val strengths: FloatArray) {
-
-        val size: Int get() = timesMs.size
-
-        fun timeOf(index: Int): Int = timesMs[index]
-
-        fun strengthOf(index: Int): Float = strengths[index]
-
-        /** The index of the first beat at or after [positionMs]; [size] if there is none. */
-        fun firstFrom(positionMs: Long): Int {
-            val found = timesMs.binarySearch(positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt())
-            return if (found < 0) -found - 1 else found
-        }
-    }
-
-    /** The current track's beats, when it has some worth trusting. Set by the service. */
-    @Volatile
-    var grid: BeatGrid? = null
-
-    /**
-     * The player's position, as heard. Set by the service, and only ever called from the main
-     * thread, which is the player's own and the one the screen draws on.
-     */
-    @Volatile
-    var clock: (() -> Long)? = null
 
     /** How much of the past is kept: well past any output latency, Bluetooth included. */
     private const val SLOTS = 8192

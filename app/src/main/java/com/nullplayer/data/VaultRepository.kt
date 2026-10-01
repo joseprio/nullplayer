@@ -301,21 +301,9 @@ class VaultRepository(private val context: Context) {
         dao.setLoudness(id, lufs, peak)
     }
 
-    /** Everything still to analyse for loudness, for beats at [beatsVersion], or both. */
-    suspend fun unanalysed(beatsVersion: Int): List<Track> =
-        withContext(Dispatchers.IO) { dao.unanalysed(beatsVersion) }
-
-    fun observeUnanalysed(beatsVersion: Int): Flow<List<String>> =
-        dao.observeUnanalysed(beatsVersion)
-
-    suspend fun beats(id: String): TrackBeats? = withContext(Dispatchers.IO) { dao.beats(id) }
-
-    suspend fun setBeats(beats: TrackBeats) = withContext(Dispatchers.IO) { dao.setBeats(beats) }
-
     suspend fun delete(track: Track) = withContext(Dispatchers.IO) {
         files.fileFor(track.id).delete()
         groups.untagEverywhere(track.id)
-        dao.deleteBeats(track.id)
         dao.delete(track)
     }
 
