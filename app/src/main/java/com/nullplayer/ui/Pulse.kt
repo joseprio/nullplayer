@@ -13,7 +13,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.nullplayer.playback.MusicPulse
-import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.log10
 
@@ -52,10 +51,13 @@ private const val RISE_SECONDS = 0.03f
  * climbs to a higher peak over [RISE_SECONDS] and otherwise falls at [FALL_DB_PER_SECOND], so it
  * drops smoothly instead of flickering between frames.
  *
- * Paused, or with nothing to go on, it settles back to one half, which is the glow as it always
- * was, so stopping the music leaves the button looking as it did before the pulse existed. The
- * value only ever reaches the draw phase, so the loop repaints the glow without composing
- * anything.
+ * Paused, it holds still: the glow keeps the light it had at the moment the music stopped, and
+ * neither the meter nor the ceiling decays until the music plays again, so a pause and a resume
+ * leave the pulse exactly where it was. Only time spent playing counts. A frame with nothing to
+ * go on -- a track just opened, the clock not yet caught up after a resume -- holds it as well,
+ * rather than reading as silence. Before the first beat it rests at one half, which is the glow
+ * as it always was. The value only ever reaches the draw phase, so the loop repaints the glow
+ * without composing anything.
  *
  * It runs only while its button is on screen, which is also the only time the service is asked to
  * measure anything. The player and the mini player each hold one.
@@ -63,6 +65,8 @@ private const val RISE_SECONDS = 0.03f
 @Composable
 internal fun rememberMusicPulse(enabled: Boolean, playing: Boolean): MutableFloatState? {
     val meter = remember { mutableFloatStateOf(0.5f) }
+    // Kept across a pause with the meter, so a resume measures against the same loudness.
+    val ceilingState = remember { mutableFloatStateOf(CEILING_FLOOR_DB) }
     if (!enabled) return null
 
     // Measured only while the screen is showing: the player stays composed behind a stopped
@@ -85,21 +89,18 @@ internal fun rememberMusicPulse(enabled: Boolean, playing: Boolean): MutableFloa
         }
     }
     LaunchedEffect(playing) {
+        // Paused, nothing runs: the glow stays as it was, and no time passes for it.
+        if (!playing) return@LaunchedEffect
         val fall = FALL_DB_PER_SECOND / RANGE_DB
-        var ceiling = CEILING_FLOOR_DB
+        var ceiling by ceilingState
+        // Restarted with each resume, so the first frame back covers none of the pause.
         var last = 0L
         while (true) {
             withFrameNanos { now ->
                 val seconds = if (last == 0L) 0f else (now - last) / 1_000_000_000f
                 last = now
                 var level by meter
-                if (!playing) {
-                    // Out of the music the glow eases back to rest rather than jumping.
-                    val step = 1f - exp(-seconds / 0.25f)
-                    level += (0.5f - level) * step
-                    return@withFrameNanos
-                }
-                val peak = MusicPulse.peak(seconds.coerceAtLeast(1f / 60f)) ?: 0f
+                val peak = MusicPulse.peak(seconds.coerceAtLeast(1f / 60f)) ?: return@withFrameNanos
                 val db = if (peak <= 0f) CEILING_FLOOR_DB - RANGE_DB else 20f * log10(peak)
                 ceiling = maxOf(db, ceiling - CEILING_FALL_DB_PER_SECOND * seconds, CEILING_FLOOR_DB)
                 val reading = ((db - (ceiling - RANGE_DB)) / RANGE_DB).coerceIn(0f, 1f)
@@ -108,10 +109,6 @@ internal fun rememberMusicPulse(enabled: Boolean, playing: Boolean): MutableFloa
                 } else {
                     maxOf(reading, level - fall * seconds)
                 }
-            }
-            if (!playing && abs(meter.floatValue - 0.5f) < 0.001f) {
-                meter.floatValue = 0.5f
-                break
             }
         }
     }

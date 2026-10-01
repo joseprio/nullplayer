@@ -1013,7 +1013,7 @@ private fun Hero(
                     color = TEXT,
                     fontSize = digits,
                     lineHeight = lineHeight,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.SemiBold,
                     letterSpacing = 1.sp,
                     style = TABULAR,
                 )
