@@ -7,6 +7,8 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
+import android.view.inputmethod.InputMethodManager
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -56,10 +59,11 @@ import com.nullplayer.ui.inMonaSans
 import com.nullplayer.ui.PlayerScreen
 import com.nullplayer.ui.SettingsScreen
 import com.nullplayer.ui.LibraryScreen
+import com.nullplayer.ui.LicencesScreen
 import com.nullplayer.ui.MiniPlayer
 import com.nullplayer.ui.TracksScreen
 
-private enum class Screen { PLAYER, LIBRARY, TRACKS, SETTINGS, EQUALIZER }
+private enum class Screen { PLAYER, LIBRARY, TRACKS, SETTINGS, LICENCES, EQUALIZER }
 
 /**
  * A [FragmentActivity] rather than a plain `ComponentActivity` only because `BiometricPrompt`
@@ -69,6 +73,9 @@ private enum class Screen { PLAYER, LIBRARY, TRACKS, SETTINGS, EQUALIZER }
 class MainActivity : FragmentActivity() {
 
     private val viewModel: PlayerViewModel by viewModels()
+
+    /** Mirrors the launch lock, so a keyboard cannot drive the player from behind it. */
+    private var keysLocked = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -151,10 +158,12 @@ class MainActivity : FragmentActivity() {
             // cannot land straight in the library, or in settings, without passing the prompt.
             val guarded = when (screen) {
                 Screen.LIBRARY, Screen.TRACKS -> vaultLocked
-                Screen.SETTINGS -> settingsLocked
+                // Reached only through settings, so it is behind the same lock.
+                Screen.SETTINGS, Screen.LICENCES -> settingsLocked
                 else -> false
             }
             val visible = if (guarded) Screen.PLAYER else screen
+            SideEffect { keysLocked = locked }
 
             LaunchedEffect(locked) {
                 if (locked) askToUnlock { lockMessage = it }
@@ -249,6 +258,7 @@ class MainActivity : FragmentActivity() {
 
                         BackHandler(enabled = visible != Screen.PLAYER) {
                             screen = when {
+                                visible == Screen.LICENCES -> Screen.SETTINGS
                                 visible != Screen.TRACKS -> Screen.PLAYER
                                 tracksFromRibbon -> Screen.PLAYER
                                 else -> Screen.LIBRARY
@@ -369,7 +379,13 @@ class MainActivity : FragmentActivity() {
                                 onRequiredDevice = viewModel::setRequiredDevice,
                                 onPreferredDevice = viewModel::setPreferredDevice,
                                 onHapticMode = viewModel::setHapticMode,
+                                onOpenLicences = { screen = Screen.LICENCES },
                                 onClose = { screen = Screen.PLAYER },
+                                miniPlayer = miniPlayer,
+                            )
+
+                            Screen.LICENCES -> LicencesScreen(
+                                onClose = { screen = Screen.SETTINGS },
                                 miniPlayer = miniPlayer,
                             )
 
@@ -395,6 +411,42 @@ class MainActivity : FragmentActivity() {
             }
         }
     }
+
+    /**
+     * A desktop keyboard's transport keys, as desktop players lay them out: Space plays and
+     * pauses, Shift with an arrow seeks, Ctrl with an arrow steps through the queue.
+     *
+     * Taken here, ahead of the views, because the bare arrows already belong to the screen --
+     * they move focus, and turn the ribbon -- and would never reach a later handler. While a text
+     * field is being typed in, every one of these is that field's (a space, a selection, a jump
+     * by word), so they are passed through untouched. Media keys are not handled: the session
+     * answers those, focused or not.
+     */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && !keysLocked && !typing() && transportKey(event)) {
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun transportKey(event: KeyEvent): Boolean {
+        // A held key repeats a seek, but not a toggle or a skip, which would flutter.
+        val first = event.repeatCount == 0
+        val step = if (event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+        when {
+            event.keyCode == KeyEvent.KEYCODE_SPACE && event.hasNoModifiers() ->
+                if (first) viewModel.togglePlay()
+            event.keyCode != KeyEvent.KEYCODE_DPAD_LEFT && event.keyCode != KeyEvent.KEYCODE_DPAD_RIGHT ->
+                return false
+            event.isCtrlPressed -> if (first) { if (step > 0) viewModel.next() else viewModel.previous() }
+            event.isShiftPressed -> viewModel.scrub(step * SEEK_STEP_MS)
+            else -> return false
+        }
+        return true
+    }
+
+    private fun typing(): Boolean =
+        getSystemService(InputMethodManager::class.java)?.isAcceptingText == true
 
     /** The activity is `singleTask`, so a second share arrives here rather than in a new one. */
     override fun onNewIntent(intent: Intent) {
@@ -498,6 +550,9 @@ private fun LockScreen(message: String?, onUnlock: () -> Unit) {
 }
 
 private val NullPlayerType = Typography().inMonaSans()
+
+/** How far one Shift+arrow seeks; held, it repeats at the keyboard's own rate. */
+private const val SEEK_STEP_MS = 5_000L
 
 private val NullPlayerColors = darkColorScheme(
     primary = ComposeColor(0xFF30FFBA),

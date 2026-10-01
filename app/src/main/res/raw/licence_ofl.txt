@@ -1,37 +1,3 @@
-# Third-party licences
-
-The app shows all of these under Settings → About → Licences, from the texts in
-`app/src/main/res/raw/` and the list in `app/src/main/java/com/nullplayer/ui/LicencesScreen.kt`.
-A dependency added to the release build belongs in that list too.
-
-## Libraries
-
-| Component | Copyright holder | Licence |
-|---|---|---|
-| AndroidX, Jetpack Compose, Media3 | The Android Open Source Project | Apache 2.0 |
-| Kotlin, kotlinx, Compose Multiplatform | JetBrains s.r.o. | Apache 2.0 |
-| Guava | The Guava Authors | Apache 2.0 |
-| Okio | Square, Inc. | Apache 2.0 |
-| Haze | Chris Banes | Apache 2.0 |
-| Poko | Drew Hamilton | Apache 2.0 |
-| NanoHTTPD | Paul S. Hawke, Jarno Elonen, Konstantinos Togias | BSD 3-Clause |
-
-The full texts are `licence_apache.txt` and `licence_bsd_nanohttpd.txt` in `app/src/main/res/raw/`.
-
-## Mona Sans
-
-The typeface in `app/src/main/res/font/` is [Mona Sans](https://github.com/github/mona-sans)
-v2.0.27, by GitHub, used under the SIL Open Font License 1.1 reproduced below.
-
-- `mona_sans_mono.ttf` is Mona Sans Mono, unmodified.
-- `null_sans.ttf` is **Null Sans**, a Modified Version of Mona Sans: the foot of the tabular
-  figure one (`one.tf`) is shortened to start under its flag and overhang the stem equally on
-  both sides, at every weight and optical size. Because the licence reserves the name "Mona",
-  the modified font is renamed throughout its name table (family, full and PostScript names, and
-  every named instance); only the copyright notice, which the licence requires be kept, and the
-  description crediting the original still mention Mona Sans. It remains under the OFL.
-
-```
 Copyright 2022 The Mona Sans Project Authors (https://github.com/github/mona-sans), with Reserved Font Name "Mona"
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
@@ -125,4 +91,3 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
-```

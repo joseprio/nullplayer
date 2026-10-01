@@ -3,6 +3,7 @@ package com.nullplayer.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.rememberScrollState
@@ -41,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextOverflow
@@ -199,15 +201,15 @@ internal fun SectionHeader(text: String, action: (@Composable () -> Unit)? = nul
 @Composable
 internal fun ToggleRow(
     title: String,
-    subtitle: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    subtitle: String? = null,
     enabled: Boolean = true,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, color = if (enabled) TEXT else MUTED, fontSize = 15.sp)
-            Text(subtitle, color = MUTED, fontSize = 13.sp)
+            if (subtitle != null) Text(subtitle, color = MUTED, fontSize = 13.sp)
         }
         Spacer(Modifier.width(12.dp))
         NullSwitch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
@@ -233,6 +235,36 @@ internal fun NullSwitch(
             uncheckedBorderColor = LINE,
         ),
     )
+}
+
+/** One entry in a pick-any list: a name and a box, with the whole line taking the tap. */
+@Composable
+internal fun CheckRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .toggleable(value = checked, role = Role.Checkbox, onValueChange = onCheckedChange)
+            .padding(vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, color = TEXT, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Spacer(Modifier.width(12.dp))
+        // [MUTED], not [LINE], for the empty box, for the reason [ChoiceRow]'s ring gives.
+        Checkbox(
+            checked = checked,
+            onCheckedChange = null,
+            colors = CheckboxDefaults.colors(
+                checkedColor = ACCENT,
+                checkmarkColor = readableOn(ACCENT),
+                uncheckedColor = MUTED,
+            ),
+        )
+    }
 }
 
 /** One entry in a pick-exactly-one list. */

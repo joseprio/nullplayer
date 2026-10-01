@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
@@ -75,6 +76,7 @@ fun SettingsScreen(
     onRequiredDevice: (String) -> Unit,
     onPreferredDevice: (String) -> Unit,
     onHapticMode: (HapticMode) -> Unit,
+    onOpenLicences: () -> Unit,
     onClose: () -> Unit,
     miniPlayer: @Composable (Modifier) -> Unit,
     modifier: Modifier = Modifier,
@@ -115,9 +117,41 @@ fun SettingsScreen(
                 }
             }
 
-            // Above the biometric switches, and not greyed out with them: this is the one lock
-            // here that asks nothing of the phone's hardware, so it is the one still available
-            // on a device with no enrolment.
+            // One panel for the four biometric locks. Settings comes last because it is about the
+            // three above it: without it, any of them can be switched off by whoever is holding
+            // the phone.
+            item {
+                Panel {
+                    ToggleRow(
+                        title = "Unlock the app",
+                        checked = settings.lockOnLaunch,
+                        onCheckedChange = onLockOnLaunch,
+                        enabled = state.biometricsAvailable,
+                    )
+                    ToggleRow(
+                        title = "Unlock playback",
+                        checked = settings.lockOnPlay,
+                        onCheckedChange = onLockOnPlay,
+                        enabled = state.biometricsAvailable,
+                    )
+                    ToggleRow(
+                        title = "Unlock the library",
+                        checked = settings.lockOnDock,
+                        onCheckedChange = onLockOnDock,
+                        enabled = state.biometricsAvailable,
+                    )
+                    ToggleRow(
+                        title = "Unlock settings",
+                        checked = settings.lockOnSettings,
+                        onCheckedChange = onLockOnSettings,
+                        enabled = state.biometricsAvailable,
+                    )
+                }
+            }
+
+            // Not greyed out with the biometric switches above: this is the one lock here that
+            // asks nothing of the phone's hardware, so it is the one still available on a device
+            // with no enrolment.
             item {
                 Panel {
                     ToggleRow(
@@ -126,59 +160,6 @@ fun SettingsScreen(
                             "the recent-apps list.",
                         checked = settings.blockScreenshots,
                         onCheckedChange = onBlockScreenshots,
-                    )
-                }
-            }
-
-            item {
-                Panel {
-                    ToggleRow(
-                        title = "Unlock the app",
-                        subtitle = "Ask on launch, and after half a minute in the background.",
-                        checked = settings.lockOnLaunch,
-                        onCheckedChange = onLockOnLaunch,
-                        enabled = state.biometricsAvailable,
-                    )
-                }
-            }
-
-            item {
-                Panel {
-                    ToggleRow(
-                        title = "Unlock playback",
-                        subtitle = "Ask every time the music starts or resumes, wherever the " +
-                            "press came from.",
-                        checked = settings.lockOnPlay,
-                        onCheckedChange = onLockOnPlay,
-                        enabled = state.biometricsAvailable,
-                    )
-                }
-            }
-
-            item {
-                Panel {
-                    ToggleRow(
-                        title = "Unlock the library",
-                        subtitle = "Ask before the dock opens. It is the screen that lists every " +
-                            "track by name, and the only one that can delete them.",
-                        checked = settings.lockOnDock,
-                        onCheckedChange = onLockOnDock,
-                        enabled = state.biometricsAvailable,
-                    )
-                }
-            }
-
-            // Last of the four, because it is about the three above it: without this one, any of
-            // them can be switched off by whoever is holding the phone.
-            item {
-                Panel {
-                    ToggleRow(
-                        title = "Unlock settings",
-                        subtitle = "Ask before this screen opens, so the locks above cannot " +
-                            "simply be switched off.",
-                        checked = settings.lockOnSettings,
-                        onCheckedChange = onLockOnSettings,
-                        enabled = state.biometricsAvailable,
                     )
                 }
             }
@@ -305,27 +286,23 @@ fun SettingsScreen(
 
             // One switch per part rather than a handful of canned lines to choose between: the
             // parts are independent, and the announcement is short enough that any combination
-            // of them still reads as a sentence.
+            // of them still reads as a sentence. With all of them off it says so.
             item {
                 Panel {
                     Text("Announce", color = TEXT, fontSize = 15.sp)
                     Text(
-                        text = "What the voice says about a track. With all of them off it says " +
-                            "so, rather than nothing at all.",
+                        "What the voice says when you tap the track number.",
                         color = MUTED,
                         fontSize = 13.sp,
                     )
-                }
-            }
-
-            items(VoicePart.entries) { part ->
-                Panel {
-                    ToggleRow(
-                        title = partTitle(part),
-                        subtitle = partSubtitle(part),
-                        checked = part in settings.voiceParts,
-                        onCheckedChange = { onVoicePart(part, it) },
-                    )
+                    Spacer(Modifier.height(4.dp))
+                    VoicePart.entries.forEach { part ->
+                        CheckRow(
+                            title = partTitle(part),
+                            checked = part in settings.voiceParts,
+                            onCheckedChange = { onVoicePart(part, it) },
+                        )
+                    }
                 }
             }
 
@@ -422,6 +399,19 @@ fun SettingsScreen(
                     )
                 }
             }
+
+            // -- About ------------------------------------------------------------------------
+
+            item { SectionHeader("About") }
+
+            item {
+                Panel(onClick = onOpenLicences) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Licences", color = TEXT, fontSize = 15.sp, modifier = Modifier.weight(1f))
+                        Glyph(Icons.AutoMirrored.Filled.KeyboardArrowRight, MUTED, contentDescription = null)
+                    }
+                }
+            }
         }
     }
 
@@ -488,14 +478,6 @@ private fun partTitle(part: VoicePart): String = when (part) {
     VoicePart.ARTIST -> "Artist"
     VoicePart.ALBUM -> "Album"
     VoicePart.YEAR -> "Year"
-}
-
-/** How the part is spoken, so the row can be judged without turning it on to hear it. */
-private fun partSubtitle(part: VoicePart): String = when (part) {
-    VoicePart.TITLE -> "\"Blue Monday.\" An untitled file is named as such."
-    VoicePart.ARTIST -> "\"… by New Order.\""
-    VoicePart.ALBUM -> "\"… from Power, Corruption and Lies.\""
-    VoicePart.YEAR -> "\"… 1983.\""
 }
 
 /** What the Voice row says underneath itself: the chosen voice, by name. */

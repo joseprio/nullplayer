@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- Declared optional so the store offers the app to Chromebooks and desktops driven by a
+         mouse and keyboard; every control is reachable by pointer. -->
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
     <application
         android:name=".NullPlayerApp"
         android:allowBackup="false"
@@ -26,8 +30,18 @@
             android:exported="true"
             android:excludeFromRecents="false"
             android:launchMode="singleTask"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
             android:theme="@style/Theme.NullPlayer">
+            <!-- In a desktop window: opens phone-shaped, and can be dragged to any size from a
+                 small portrait column up to full screen. The layout follows the window, not the
+                 device, so a resize reflows it live rather than restarting the activity. -->
+            <layout
+                android:defaultWidth="420dp"
+                android:defaultHeight="820dp"
+                android:gravity="center"
+                android:minWidth="320dp"
+                android:minHeight="480dp" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
