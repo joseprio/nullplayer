@@ -11,7 +11,9 @@ import com.nullplayer.R
 
 /**
  * The app's one typeface: GitHub's Mona Sans, shipped as two variable files under res/font
- * (SIL Open Font License, see THIRD_PARTY_LICENSES.md). Each family is declared once per weight
+ * (SIL Open Font License, see THIRD_PARTY_LICENSES.md). The proportional one is modified -- the
+ * foot of the tabular 1 is trimmed to its flag -- and so, the licence reserving the name "Mona",
+ * is renamed Null Sans, in its file and in its own name table. Each family is declared once per weight
  * the UI asks for, so a `fontWeight` on a Text picks the matching axis position instead of
  * being faked by the renderer.
  */
@@ -45,7 +47,7 @@ private fun variable(resId: Int, opsz: Float? = null) = FontFamily(
 )
 
 /** Everything that reads as prose: titles, labels, buttons, the lock screen. */
-internal val MonaSans = variable(R.font.mona_sans, opsz = MONA_DISPLAY)
+internal val MonaSans = variable(R.font.null_sans, opsz = MONA_DISPLAY)
 
 /** Text that is read character by character rather than as figures: the share URL, the EQ paste box. */
 internal val MonaSansMono = variable(R.font.mona_sans_mono)
